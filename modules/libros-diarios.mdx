@@ -1,0 +1,217 @@
+---
+title: "Managing Journal Books (Libros Diarios) in ContaFácil"
+sidebarTitle: "Libros Diarios"
+description: "Create, update, and deactivate journal books (libros diarios) that group accounting entries by period or purpose."
+---
+
+## What is a Libro Diario?
+
+A **libro diario** (journal book) is the primary accounting register where all financial transactions are recorded in chronological order. In ContaFácil, every asiento contable (journal entry) must belong to a libro diario, which in turn belongs to a single empresa. This design lets you organize entries by period, branch, or any other business criterion — for example, `Diario General 2024` or `Libro Operaciones Q1`.
+
+Each libro diario has a lifecycle:
+
+<Steps>
+  <Step title="Create the libro">
+    POST a new libro with `nombreLibro`, `idEmpresa`, and optional `descripcion`. It starts as `ACTIVO` by default.
+  </Step>
+  <Step title="Record asientos">
+    Use the libro's `id_libro` when posting journal entries via `POST /api/asientos`. Only `ACTIVO` libros accept new entries.
+  </Step>
+  <Step title="Deactivate when closed">
+    PATCH the libro's `estado` to `INACTIVO` to prevent new entries. Historical reports remain queryable.
+  </Step>
+  <Step title="Delete only if empty">
+    A libro can only be physically deleted if it has zero asientos. Attempting to delete a libro with entries returns a `409` with `accion: 'DESACTIVAR'` — the API signals that deactivation is the correct course of action.
+  </Step>
+</Steps>
+
+---
+
+## Data Model
+
+| Field | Type | Description |
+|---|---|---|
+| `id_libro` | integer | Auto-generated primary key |
+| `id_empresa` | integer | Foreign key to the owning empresa |
+| `nombre_libro` | text | Unique book name within the empresa |
+| `descripcion` | text \| null | Optional free-text description |
+| `estado` | text | `ACTIVO` or `INACTIVO` |
+| `created_at` | timestamptz | Record creation timestamp |
+| `updated_at` | timestamptz | Last update timestamp |
+| `cantidad_asientos` | integer | **Computed** — count of asientos linked to the book |
+
+---
+
+## API Reference
+
+### List Libros Diarios
+
+<Note>
+  Pass `incluirInactivos=true` as a query parameter to include `INACTIVO` books in the response. By default, only `ACTIVO` books are returned.
+</Note>
+
+**`GET /api/libros`**
+
+**Query parameters**
+
+<ParamField query="idEmpresa" type="integer" required>
+  The ID of the empresa whose libros you want to list.
+</ParamField>
+
+<ParamField query="incluirInactivos" type="boolean">
+  Set to `true` to also return books with `estado = 'INACTIVO'`. Defaults to `false`.
+</ParamField>
+
+```bash
+curl "https://your-app.com/api/libros?idEmpresa=1&incluirInactivos=true"
+```
+
+**Response**
+
+<ResponseField name="[]" type="array">
+  Array of libro objects.
+  <Expandable title="Libro object fields">
+    <ResponseField name="id_libro" type="integer">Auto-generated book ID.</ResponseField>
+    <ResponseField name="id_empresa" type="integer">ID of the owning empresa.</ResponseField>
+    <ResponseField name="nombre_libro" type="string">Name of the journal book.</ResponseField>
+    <ResponseField name="descripcion" type="string | null">Optional description.</ResponseField>
+    <ResponseField name="estado" type="string">`ACTIVO` or `INACTIVO`.</ResponseField>
+    <ResponseField name="created_at" type="string">ISO 8601 creation timestamp.</ResponseField>
+    <ResponseField name="updated_at" type="string">ISO 8601 last-update timestamp.</ResponseField>
+    <ResponseField name="cantidad_asientos" type="integer">Number of journal entries recorded in this book.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json
+[
+  {
+    "id_libro": 1,
+    "id_empresa": 1,
+    "nombre_libro": "Diario General 2024",
+    "descripcion": "Libro principal del ejercicio fiscal 2024",
+    "estado": "ACTIVO",
+    "created_at": "2024-01-01T00:00:00.000Z",
+    "updated_at": "2024-01-01T00:00:00.000Z",
+    "cantidad_asientos": 42
+  }
+]
+```
+
+---
+
+### Create a Libro Diario
+
+**`POST /api/libros`**
+
+<ParamField body="idEmpresa" type="integer" required>
+  ID of the empresa that owns this book. Must be a positive integer.
+</ParamField>
+
+<ParamField body="nombreLibro" type="string" required>
+  Unique name for the journal book within the empresa (e.g. `"Diario General 2024"`).
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Optional free-text description of the book's purpose.
+</ParamField>
+
+<ParamField body="estado" type="string">
+  Initial state. Accepts `ACTIVO` or `INACTIVO`. Defaults to `ACTIVO`.
+</ParamField>
+
+```bash
+curl -X POST "https://your-app.com/api/libros" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idEmpresa": 1,
+    "nombreLibro": "Diario General 2024",
+    "descripcion": "Libro principal del ejercicio fiscal 2024",
+    "estado": "ACTIVO"
+  }'
+```
+
+**Response `201 Created`**
+
+<ResponseField name="id_libro" type="integer">
+  The auto-generated ID of the newly created libro diario.
+</ResponseField>
+
+```json
+{ "id_libro": 3 }
+```
+
+---
+
+### Update a Libro Diario
+
+**`PATCH /api/libros/:idLibro`**
+
+<ParamField path="idLibro" type="integer" required>
+  ID of the libro to update.
+</ParamField>
+
+<ParamField body="idEmpresa" type="integer" required>
+  Must match the owning empresa to prevent cross-tenant updates.
+</ParamField>
+
+<ParamField body="nombreLibro" type="string" required>
+  New name for the book. Must be unique within the empresa.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Updated description (pass `null` to clear).
+</ParamField>
+
+<ParamField body="estado" type="string" required>
+  `ACTIVO` or `INACTIVO`. Set to `INACTIVO` to close the book to new entries.
+</ParamField>
+
+```bash
+curl -X PATCH "https://your-app.com/api/libros/3" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idEmpresa": 1,
+    "nombreLibro": "Diario General 2024",
+    "descripcion": "Libro cerrado al 31/12/2024",
+    "estado": "INACTIVO"
+  }'
+```
+
+**Response `200 OK`**
+
+```json
+{ "mensaje": "Libro actualizado correctamente" }
+```
+
+---
+
+### Delete a Libro Diario
+
+**`DELETE /api/libros/:idLibro`**
+
+<ParamField path="idLibro" type="integer" required>
+  ID of the libro to delete.
+</ParamField>
+
+<ParamField query="idEmpresa" type="integer" required>
+  The empresa that owns the libro. Used to prevent cross-tenant deletions.
+</ParamField>
+
+<Warning>
+  A libro that already has asientos recorded **cannot be physically deleted**. The API returns `409 Conflict` with `accion: 'DESACTIVAR'`, indicating you should deactivate the book instead of deleting it. This preserves the integrity of all historical records.
+</Warning>
+
+```bash
+curl -X DELETE "https://your-app.com/api/libros/3?idEmpresa=1"
+```
+
+**Response `204 No Content`** — returned when the book is successfully deleted (i.e., it had zero entries).
+
+**Error response `409 Conflict`** — returned when the book has entries:
+
+```json
+{
+  "error": "El libro tiene asientos y no puede eliminarse físicamente",
+  "accion": "DESACTIVAR"
+}
+```

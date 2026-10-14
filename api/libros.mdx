@@ -1,0 +1,353 @@
+---
+title: "Journal Books (Libros Diarios) API Reference"
+sidebarTitle: "Libros"
+description: "Create, list, update, and delete journal books (libros diarios) in ContaFácil, with lifecycle state management backed by Supabase PostgreSQL."
+---
+
+In ContaFácil, every journal entry (asiento contable) belongs to a **libro diario** — a named journal book that groups related accounting entries within a company. Books have a two-state lifecycle (`ACTIVO` / `INACTIVO`) that lets you deactivate books with existing entries instead of deleting them outright. Each book tracks how many journal entries it contains via the `cantidad_asientos` aggregate field, which drives the soft-delete protection described below.
+
+<Note>
+  A libro diario can be in one of two states: `ACTIVO` or `INACTIVO`. Only `ACTIVO` books accept new journal entries (`POST /api/asientos`). Listing books via `GET /api/libros` returns only active books by default; pass `incluirInactivos=true` to include inactive ones.
+</Note>
+
+<Warning>
+  **BOOK\_HAS\_ENTRIES — physical deletion is blocked.** `DELETE /api/libros/:idLibro` checks whether the book has any associated journal entries (`public.asientos`). If `cantidad_asientos > 0`, the delete is rejected with HTTP 409 and `{ "accion": "DESACTIVAR" }`. In that case you must use `PATCH /api/libros/:idLibro` with `estado: "INACTIVO"` to deactivate the book instead of removing it physically.
+</Warning>
+
+---
+
+## GET /api/libros
+
+Returns an array of journal books belonging to the specified company. By default only `ACTIVO` books are returned. Pass `incluirInactivos=true` to include `INACTIVO` books in the response. Results are ordered alphabetically by `nombre_libro`. Each item in the array includes a live count of associated journal entries.
+
+### Query parameters
+
+<ParamField query="idEmpresa" type="integer" required>
+  The company's numeric primary key. Must be a positive integer. Obtained from the `empresa_id` field returned by `/api/login` or `/api/registro`.
+</ParamField>
+
+<ParamField query="incluirInactivos" type="string">
+  When set to the string `"true"`, inactive books (`estado = 'INACTIVO'`) are included in the results. Any other value (or omitting the parameter entirely) returns only active books. Default: `false`.
+</ParamField>
+
+### Response fields
+
+Each element of the returned array contains:
+
+<ResponseField name="id_libro" type="number">
+  The book's numeric primary key.
+</ResponseField>
+
+<ResponseField name="id_empresa" type="number">
+  The company this book belongs to.
+</ResponseField>
+
+<ResponseField name="nombre_libro" type="string">
+  The book's display name, unique within the company.
+</ResponseField>
+
+<ResponseField name="descripcion" type="string | null">
+  An optional description for the book.
+</ResponseField>
+
+<ResponseField name="estado" type="string">
+  Lifecycle state: `"ACTIVO"` or `"INACTIVO"`.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp of when the book was created.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp of the last update.
+</ResponseField>
+
+<ResponseField name="cantidad_asientos" type="number">
+  The total number of journal entries (`public.asientos`) linked to this book. Used to enforce the soft-delete protection on deletion.
+</ResponseField>
+
+### Example requests
+
+```bash
+# Active books only (default)
+curl "https://your-domain.com/api/libros?idEmpresa=7"
+
+# All books including inactive
+curl "https://your-domain.com/api/libros?idEmpresa=7&incluirInactivos=true"
+```
+
+### Example response
+
+**200 OK**
+
+```json
+[
+  {
+    "id_libro": 3,
+    "id_empresa": 7,
+    "nombre_libro": "Libro Diario General 2024",
+    "descripcion": "Registro principal de operaciones 2024",
+    "estado": "ACTIVO",
+    "created_at": "2024-01-05T08:00:00.000Z",
+    "updated_at": "2024-06-15T14:32:00.000Z",
+    "cantidad_asientos": 42
+  },
+  {
+    "id_libro": 5,
+    "id_empresa": 7,
+    "nombre_libro": "Libro de Ventas Q1",
+    "descripcion": null,
+    "estado": "ACTIVO",
+    "created_at": "2024-03-01T10:00:00.000Z",
+    "updated_at": "2024-03-01T10:00:00.000Z",
+    "cantidad_asientos": 0
+  }
+]
+```
+
+**400 Bad Request — invalid idEmpresa**
+
+```json
+{
+  "error": "idEmpresa debe ser un entero positivo"
+}
+```
+
+---
+
+## POST /api/libros
+
+Creates a new journal book for the specified company. The `nombreLibro` value is trimmed of leading/trailing whitespace before being stored. Book names must be unique within a company; attempting to create a duplicate returns HTTP 409.
+
+### Request body
+
+<ParamField body="idEmpresa" type="integer" required>
+  The company's numeric primary key. Must be a positive integer.
+</ParamField>
+
+<ParamField body="nombreLibro" type="string" required>
+  The display name for the new book. Trimmed before storage. Must be non-empty and unique within the company.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  An optional description. Stored as `NULL` if omitted.
+</ParamField>
+
+<ParamField body="estado" type="string">
+  Initial lifecycle state. Accepted values: `"ACTIVO"` or `"INACTIVO"`. Defaults to `"ACTIVO"` if omitted.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id_libro" type="number">
+  The numeric primary key assigned to the newly created book.
+</ResponseField>
+
+### Example request
+
+```bash
+curl -X POST https://your-domain.com/api/libros \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idEmpresa": 7,
+    "nombreLibro": "Libro Diario General 2025",
+    "descripcion": "Registro principal de operaciones del año 2025",
+    "estado": "ACTIVO"
+  }'
+```
+
+### Example responses
+
+**201 Created**
+
+```json
+{
+  "id_libro": 9
+}
+```
+
+**400 Bad Request — missing or invalid fields**
+
+```json
+{
+  "error": "idEmpresa y nombreLibro son obligatorios"
+}
+```
+
+**400 Bad Request — invalid estado value**
+
+```json
+{
+  "error": "Estado inválido"
+}
+```
+
+**409 Conflict — duplicate book name in the same company**
+
+```json
+{
+  "error": "Ya existe un libro con ese nombre en la empresa"
+}
+```
+
+---
+
+## PATCH /api/libros/:idLibro
+
+Updates the name, description, or lifecycle state of an existing journal book. The `nombreLibro` value is trimmed before being stored. The book must belong to the company identified by `idEmpresa` in the request body; a mismatch results in a 404. This is also the correct endpoint to **deactivate** a book that cannot be physically deleted due to existing entries.
+
+### Path parameters
+
+<ParamField path="idLibro" type="integer" required>
+  The numeric primary key of the book to update.
+</ParamField>
+
+### Request body
+
+<ParamField body="idEmpresa" type="integer" required>
+  The company's numeric primary key. The book must belong to this company or the update will return 404.
+</ParamField>
+
+<ParamField body="nombreLibro" type="string" required>
+  The new display name for the book. Trimmed before storage. Cannot be blank.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Updated description. Pass `null` to clear the existing value.
+</ParamField>
+
+<ParamField body="estado" type="string" required>
+  Lifecycle state to set. Accepted values: `"ACTIVO"` or `"INACTIVO"`. Use `"INACTIVO"` to deactivate a book that has journal entries and therefore cannot be deleted.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="mensaje" type="string">
+  Confirmation message. Always `"Libro actualizado correctamente"` on success.
+</ResponseField>
+
+### Example requests
+
+```bash
+# Rename and update description
+curl -X PATCH https://your-domain.com/api/libros/9 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idEmpresa": 7,
+    "nombreLibro": "Libro Diario General 2025 (Revisado)",
+    "descripcion": "Versión revisada — aprobada por gerencia",
+    "estado": "ACTIVO"
+  }'
+```
+
+```bash
+# Deactivate a book (use when DELETE returns 409)
+curl -X PATCH https://your-domain.com/api/libros/9 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idEmpresa": 7,
+    "nombreLibro": "Libro Diario General 2025 (Revisado)",
+    "estado": "INACTIVO"
+  }'
+```
+
+### Example responses
+
+**200 OK**
+
+```json
+{
+  "mensaje": "Libro actualizado correctamente"
+}
+```
+
+**400 Bad Request — missing or invalid fields**
+
+```json
+{
+  "error": "Datos inválidos para actualizar el libro"
+}
+```
+
+**400 Bad Request — invalid estado value**
+
+```json
+{
+  "error": "Estado inválido"
+}
+```
+
+**404 Not Found — book not found or does not belong to this company**
+
+```json
+{
+  "error": "Libro no encontrado"
+}
+```
+
+**409 Conflict — duplicate name in the same company**
+
+```json
+{
+  "error": "Ya existe un libro con ese nombre en la empresa"
+}
+```
+
+---
+
+## DELETE /api/libros/:idLibro
+
+Physically removes a journal book from `public.libros_diarios`. Before executing the `DELETE` statement, the model checks whether the book has any associated rows in `public.asientos`. If `cantidad_asientos > 0`, a `BOOK_HAS_ENTRIES` error is raised and the request is rejected with HTTP 409. In that scenario, use `PATCH /api/libros/:idLibro` with `estado: "INACTIVO"` to soft-delete the book instead.
+
+<Warning>
+  When you receive a **409** from `DELETE /api/libros/:idLibro`, the response body will contain `{ "accion": "DESACTIVAR" }`. This is the API's explicit instruction to call `PATCH /api/libros/:idLibro` with `estado: "INACTIVO"` rather than attempting to delete the book. Physically deleting a book with journal entries would break accounting history — ContaFácil prevents this at the model layer.
+</Warning>
+
+### Path parameters
+
+<ParamField path="idLibro" type="integer" required>
+  The numeric primary key of the book to delete.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="idEmpresa" type="integer" required>
+  The company's numeric primary key. The delete query is scoped to `WHERE id_libro = $1 AND id_empresa = $2` to prevent cross-tenant deletions. Must be a positive integer.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X DELETE "https://your-domain.com/api/libros/9?idEmpresa=7"
+```
+
+### Example responses
+
+**204 No Content — book deleted successfully**
+
+_(empty response body)_
+
+**400 Bad Request — invalid identifiers**
+
+```json
+{
+  "error": "Identificadores inválidos"
+}
+```
+
+**409 Conflict — book has journal entries; must deactivate instead**
+
+```json
+{
+  "error": "El libro tiene asientos y no puede eliminarse físicamente",
+  "accion": "DESACTIVAR"
+}
+```
+
+**500 Internal Server Error**
+
+```json
+{
+  "error": "Error al eliminar el libro"
+}
+```

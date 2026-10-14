@@ -1,0 +1,276 @@
+---
+title: "Company Profile API Reference — ContaFácil"
+sidebarTitle: "Empresa"
+description: "Read and update your ContaFácil company profile and admin credentials, backed by Supabase PostgreSQL with transactional user updates."
+---
+
+Every tenant in ContaFácil maps to a single row in `public.empresas`. The company profile stores legal and commercial identity information — tax IDs, contact details, and regional settings — alongside a reference to the admin user's login credentials in `public.usuarios`. The two endpoints below let you fetch the full profile for a given company and update both empresa fields and the admin account atomically inside a single PostgreSQL transaction.
+
+---
+
+## GET /api/empresa
+
+Retrieves the full profile for a single active company, including the admin user's login email. Internally this executes a `LEFT JOIN` between `public.empresas` and `public.usuarios` (filtered to `rol = 'admin'` and `estado = 'ACTIVO'`), so the `login_email` field reflects the credential used to authenticate via `POST /api/login`.
+
+### Query parameters
+
+<ParamField query="idEmpresa" type="integer" required>
+  The numeric primary key of the company to retrieve (`public.empresas.id_empresa`). Must be a positive integer. Obtained from the `empresa_id` field returned by `/api/login` or `/api/registro`.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="id_empresa" type="number">
+  The company's numeric primary key.
+</ResponseField>
+
+<ResponseField name="nombre_legal" type="string">
+  The official legal name of the company.
+</ResponseField>
+
+<ResponseField name="nombre_comercial" type="string | null">
+  The trade/commercial name, if set.
+</ResponseField>
+
+<ResponseField name="nit" type="string | null">
+  Número de Identificación Tributaria — the company's tax identification number.
+</ResponseField>
+
+<ResponseField name="nrc" type="string | null">
+  Número de Registro de Contribuyente — the VAT registration number.
+</ResponseField>
+
+<ResponseField name="giro_comercial" type="string | null">
+  The company's primary business activity or industry description.
+</ResponseField>
+
+<ResponseField name="direccion" type="string | null">
+  The registered business address.
+</ResponseField>
+
+<ResponseField name="telefono" type="string | null">
+  The company's contact telephone number.
+</ResponseField>
+
+<ResponseField name="email" type="string | null">
+  The company's public contact email (distinct from the admin login email).
+</ResponseField>
+
+<ResponseField name="logo" type="string | null">
+  A URL or base64 string representing the company logo.
+</ResponseField>
+
+<ResponseField name="moneda" type="string">
+  The default currency code for this company (e.g., `"USD"`).
+</ResponseField>
+
+<ResponseField name="pais" type="string">
+  The country associated with the company (e.g., `"El Salvador"`).
+</ResponseField>
+
+<ResponseField name="login_email" type="string | null">
+  The email address of the active admin user in `public.usuarios`. This is the credential used with `POST /api/login`.
+</ResponseField>
+
+### Example request
+
+```bash
+curl "https://your-domain.com/api/empresa?idEmpresa=7"
+```
+
+### Example responses
+
+**200 OK**
+
+```json
+{
+  "id_empresa": 7,
+  "nombre_legal": "Acme S.A. de C.V.",
+  "nombre_comercial": "Acme",
+  "nit": "0614-010190-101-1",
+  "nrc": "123456-7",
+  "giro_comercial": "Venta de software empresarial",
+  "direccion": "Calle Principal #42, San Salvador",
+  "telefono": "+503 2222-3333",
+  "email": "contacto@acme.com",
+  "logo": "https://cdn.acme.com/logo.png",
+  "moneda": "USD",
+  "pais": "El Salvador",
+  "login_email": "admin@acme.com"
+}
+```
+
+**400 Bad Request — invalid idEmpresa**
+
+```json
+{
+  "error": "idEmpresa debe ser un entero positivo"
+}
+```
+
+**404 Not Found — company not found or inactive**
+
+```json
+{
+  "error": "Empresa no encontrada o inactiva"
+}
+```
+
+---
+
+## PUT /api/empresa/:idEmpresa
+
+Updates the company profile and, optionally, the admin user's login credentials in a single atomic PostgreSQL transaction. The empresa row is always updated; the `public.usuarios` row is only touched when `login_email` (or `login_password`) is present in the request body.
+
+The transaction ensures that a partial update — for example, saving the empresa fields while failing to update the admin email — never occurs. If the provided `login_email` is already assigned to a different user, the entire transaction is rolled back and a 400 error is returned.
+
+### Path parameters
+
+<ParamField path="idEmpresa" type="integer" required>
+  The numeric primary key of the company to update. Must be a positive integer.
+</ParamField>
+
+### Request body — empresa fields
+
+<ParamField body="nombre_legal" type="string" required>
+  The official legal name. Cannot be blank or whitespace-only.
+</ParamField>
+
+<ParamField body="nombre_comercial" type="string">
+  The commercial/trade name. Optional; pass `null` to clear.
+</ParamField>
+
+<ParamField body="nit" type="string">
+  Número de Identificación Tributaria. Optional; pass `null` to clear.
+</ParamField>
+
+<ParamField body="nrc" type="string">
+  Número de Registro de Contribuyente. Optional; pass `null` to clear.
+</ParamField>
+
+<ParamField body="giro_comercial" type="string">
+  Business activity description. Optional; pass `null` to clear.
+</ParamField>
+
+<ParamField body="direccion" type="string">
+  Registered business address. Optional; pass `null` to clear.
+</ParamField>
+
+<ParamField body="telefono" type="string">
+  Contact telephone number. Optional; pass `null` to clear.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Public company contact email. Optional; pass `null` to clear.
+</ParamField>
+
+<ParamField body="logo" type="string">
+  Logo URL or base64 data URI. Optional; pass `null` to clear.
+</ParamField>
+
+<ParamField body="moneda" type="string">
+  Currency code (e.g., `"USD"`). Defaults to `"USD"` if omitted.
+</ParamField>
+
+<ParamField body="pais" type="string">
+  Country name. Defaults to `"El Salvador"` if omitted.
+</ParamField>
+
+### Request body — admin user fields (optional)
+
+<ParamField body="login_email" type="string">
+  New login email for the admin user in `public.usuarios`. If provided, the `email` column of the admin row is updated inside the same transaction. Must be unique across all users; a 400 error is returned if the address is already in use.
+</ParamField>
+
+<ParamField body="login_password" type="string">
+  New plain-text password for the admin user. Only applied when `login_email` is also present **and** this field is non-empty after trimming.
+</ParamField>
+
+### Example request — full update with credential change
+
+```bash
+curl -X PUT https://your-domain.com/api/empresa/7 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre_legal": "Acme S.A. de C.V.",
+    "nombre_comercial": "Acme",
+    "nit": "0614-010190-101-1",
+    "nrc": "123456-7",
+    "giro_comercial": "Venta de software empresarial",
+    "direccion": "Calle Principal #42, San Salvador",
+    "telefono": "+503 2222-3333",
+    "email": "contacto@acme.com",
+    "logo": "https://cdn.acme.com/logo.png",
+    "moneda": "USD",
+    "pais": "El Salvador",
+    "login_email": "nuevo-admin@acme.com",
+    "login_password": "nuev0P@ss"
+  }'
+```
+
+### Example request — update empresa fields only
+
+```bash
+curl -X PUT https://your-domain.com/api/empresa/7 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre_legal": "Acme S.A. de C.V.",
+    "telefono": "+503 2222-9999",
+    "moneda": "USD",
+    "pais": "El Salvador"
+  }'
+```
+
+### Example responses
+
+**200 OK — returns the refreshed empresa profile**
+
+```json
+{
+  "id_empresa": 7,
+  "nombre_legal": "Acme S.A. de C.V.",
+  "nombre_comercial": "Acme",
+  "nit": "0614-010190-101-1",
+  "nrc": "123456-7",
+  "giro_comercial": "Venta de software empresarial",
+  "direccion": "Calle Principal #42, San Salvador",
+  "telefono": "+503 2222-9999",
+  "email": "contacto@acme.com",
+  "logo": "https://cdn.acme.com/logo.png",
+  "moneda": "USD",
+  "pais": "El Salvador",
+  "login_email": "nuevo-admin@acme.com"
+}
+```
+
+**400 Bad Request — missing or blank nombre_legal / invalid idEmpresa**
+
+```json
+{
+  "error": "nombre_legal e idEmpresa son obligatorios"
+}
+```
+
+**400 Bad Request — login_email already taken (PostgreSQL constraint `usuarios_email_key`, code `23505`)**
+
+```json
+{
+  "error": "El correo de acceso ya está en uso por otro usuario."
+}
+```
+
+**404 Not Found — company does not exist**
+
+```json
+{
+  "error": "Empresa no encontrada"
+}
+```
+
+**500 Internal Server Error — transaction rolled back**
+
+```json
+{
+  "error": "Error al guardar la configuración de la empresa"
+}
+```

@@ -1,0 +1,145 @@
+---
+title: "Database Setup and SQL Migrations"
+sidebarTitle: "Database"
+description: "How to provision a Supabase PostgreSQL database, obtain a connection string, and run the three required SQL migrations in the correct order."
+---
+
+ContaFácil stores all its data in **Supabase PostgreSQL** — it is the only supported database engine. The application connects via the `pg` Node.js client using a standard PostgreSQL connection string; no Supabase-specific SDK is used at runtime. This means you need a Supabase project, the right connection string, and three SQL migrations applied in order before the API will serve requests correctly.
+
+## Getting a Supabase Connection String
+
+<Steps>
+  <Step title="Create a Supabase project">
+    Go to [supabase.com](https://supabase.com) and sign in. Click **New project**, choose an organization, set a **project name**, pick a region close to your users, and set a strong **database password**. Keep that password — you will need it in the connection string.
+
+    <Note>
+      The free tier provides a full PostgreSQL instance and is more than sufficient for running ContaFácil in development or for small teams.
+    </Note>
+  </Step>
+
+  <Step title="Open the connection string page">
+    Once the project has finished provisioning, go to:
+
+    **Project Settings → Database → Connection string → Session pooler**
+
+    Make sure the **Session pooler** tab is selected (not Transaction pooler or Direct connection). Session pooler is required because ContaFácil uses `pg.Pool` with persistent clients.
+  </Step>
+
+  <Step title="Copy the connection string">
+    The connection string looks like this:
+
+    ```env
+    postgresql://postgres.PROJECT_REF:DB_PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres
+    ```
+
+    Replace `DB_PASSWORD` with the password you set when creating the project (Supabase leaves a placeholder in the copied string). Paste the full URL as the value of `SUPABASE_DB_URL` in your `.env` file.
+  </Step>
+</Steps>
+
+## Running the Migrations
+
+All three migration files live in the `database/` directory of the repository. They **must be run in numerical order** — each migration may depend on objects created by the previous one.
+
+Open the **SQL Editor** in your Supabase dashboard (or use any PostgreSQL client connected to the same project), then execute each file in the steps below.
+
+<Steps>
+  <Step title="Migration 001 — empresas, libros_diarios, and vw_historial_asientos">
+    **File:** `database/001_supabase_empresas_libros_dinamicos.sql`
+
+    This is the foundation migration. It:
+
+    - Creates the `empresas` table (company profiles).
+    - Adds multi-tenancy columns (`id_empresa`, `descripcion`, `estado`, `updated_at`) to the pre-existing `libros_diarios` table and enforces a foreign-key relationship back to `empresas`.
+    - Adds a unique constraint so that each empresa cannot have two libros with the same `nombre_libro`.
+    - Creates the `vw_historial_asientos` view, which joins `detalles_asiento`, `asientos`, `libros_diarios`, `subcuentas`, and `cuentas_principales` into a single flat query surface used by reports.
+    - **Inserts a default empresa** with `id_empresa = 1` and `nombre_legal = 'Empresa principal'` so the API works out-of-the-box without additional configuration.
+
+    The view definition is:
+
+    ```sql
+    CREATE VIEW public.vw_historial_asientos AS
+    SELECT
+        l.id_libro,
+        a.id_asiento,
+        a.fecha,
+        a.descripcion,
+        s.codigo_cuenta,
+        d.codigo_subcuenta,
+        c.nombre_cuenta AS cuenta_principal,
+        d.debe,
+        d.haber
+    FROM public.detalles_asiento d
+    JOIN public.asientos a        ON a.id_asiento     = d.id_asiento
+    JOIN public.libros_diarios l  ON l.id_libro        = a.id_libro
+    JOIN public.subcuentas s      ON s.codigo_subcuenta = d.codigo_subcuenta
+    JOIN public.cuentas_principales c ON c.codigo_cuenta = s.codigo_cuenta;
+    ```
+
+    <Note>
+      The default empresa with `id_empresa = 1` is inserted with `ON CONFLICT (id_empresa) DO NOTHING`, so re-running this migration is safe — it will not overwrite an existing record.
+    </Note>
+  </Step>
+
+  <Step title="Migration 002 — balance_comprobacion() stored function">
+    **File:** `database/002_balance_comprobacion.sql`
+
+    Creates (or replaces) the `balance_comprobacion` PostgreSQL function. This function accepts four parameters — `p_id_empresa`, `p_id_libro`, `p_fecha_inicio`, and `p_fecha_fin` — validates that the requested libro belongs to the empresa, then returns a result set with one row per account plus a final totals row that includes a `cuadra` boolean indicating whether debit and credit sides balance.
+
+    The function is declared `STABLE` and uses `LANGUAGE plpgsql` with `search_path = public`.
+  </Step>
+
+  <Step title="Migration 003 — kardex table">
+    **File:** `database/003_kardex.sql`
+
+    Creates the `kardex` table for inventory movement tracking. The full DDL is:
+
+    ```sql
+    CREATE TABLE public.kardex (
+        id_movimiento         bigint  GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        codigo_articulo       text    NOT NULL DEFAULT 'UNICO',
+        fecha                 date    NOT NULL DEFAULT CURRENT_DATE,
+        concepto              text    NOT NULL,
+        tipo_movimiento       text    NOT NULL
+            CHECK (tipo_movimiento IN (
+                'INVENTARIO_INICIAL',
+                'COMPRA',
+                'VENTA',
+                'DEV_COMPRA',
+                'DEV_VENTA'
+            )),
+        cantidad              numeric NOT NULL,
+        costo_unitario        numeric NOT NULL,
+        costo_total           numeric NOT NULL,
+        saldo_cantidad        numeric NOT NULL,
+        saldo_costo_unitario  numeric NOT NULL,
+        saldo_total           numeric NOT NULL,
+        created_at            timestamptz NOT NULL DEFAULT now()
+    );
+    ```
+
+    The `tipo_movimiento` column is constrained to exactly five values: `INVENTARIO_INICIAL`, `COMPRA`, `VENTA`, `DEV_COMPRA`, and `DEV_VENTA`. Any insert that uses a different value will be rejected by PostgreSQL at the database level.
+  </Step>
+</Steps>
+
+## Connection Pooling
+
+`db.js` creates a single shared `pg.Pool` that is reused across all API requests:
+
+```js
+const pool = new Pool({
+    connectionString: dbUrl,
+    ssl: { rejectUnauthorized: false },
+    max: 10
+});
+```
+
+| Setting | Value | Meaning |
+|---|---|---|
+| `max` | `10` | Maximum number of concurrent PostgreSQL clients in the pool |
+| `ssl.rejectUnauthorized` | `false` | Accepts Supabase's TLS certificate without verifying the CA chain |
+
+The pool fires a `SELECT NOW()` probe at startup to verify connectivity. If it fails, the error is logged to `stderr` but the process continues — allowing you to diagnose connection issues via the server logs.
+
+<Warning>
+  The current schema stores `login_password` for admin users in **plain text** in the `usuarios` table. This is not suitable for production. Before deploying ContaFácil to a production environment, update the authentication layer to hash passwords (e.g. with `bcrypt`) before persisting them to the database.
+</Warning>

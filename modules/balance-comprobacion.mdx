@@ -1,0 +1,148 @@
+---
+title: "Trial Balance (Balance de Comprobación) in ContaFácil"
+sidebarTitle: "Bal. Comprobación"
+description: "Generate a trial balance (balance de comprobación) per libro diario and period to verify that total debits equal total credits."
+---
+
+## What is a Balance de Comprobación?
+
+The **balance de comprobación** (trial balance) is a summary report that lists every account's total debits (`sumas_debe`) and total credits (`sumas_haber`) over a given period, along with the resulting debit (`saldo_deudor`) or credit (`saldo_acreedor`) balance per account. Its primary purpose is to verify the mathematical integrity of the ledger: if double-entry bookkeeping has been applied correctly, the sum of all debit balances must equal the sum of all credit balances.
+
+In ContaFácil, the trial balance is computed by the PostgreSQL stored function `public.balance_comprobacion()`. It always appends a `TOTALES` summary row at the end with a `cuadra` flag indicating whether the books balance.
+
+---
+
+## API Reference
+
+### Get Balance de Comprobación
+
+**`GET /api/balance-comprobacion`**
+
+<Warning>
+  `idLibro` is **required** for the trial balance (unlike the mayorización endpoint, which accepts all books at once). If the specified `idLibro` does not belong to the provided `idEmpresa`, the PostgreSQL function raises `ERRCODE P0001` and the API returns `400 Bad Request`.
+</Warning>
+
+#### Query Parameters
+
+<ParamField query="idEmpresa" type="integer" required>
+  ID of the empresa. Must be a positive integer.
+</ParamField>
+
+<ParamField query="idLibro" type="integer" required>
+  ID of the libro diario to report on. Must belong to `idEmpresa`.
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  Cutoff date in `YYYY-MM-DD` format. All asientos with `fecha <= fechaFin` are included.
+</ParamField>
+
+<ParamField query="fechaInicio" type="string">
+  Optional start date in `YYYY-MM-DD` format. When omitted, all entries from the beginning of the book up to `fechaFin` are included. Must be `<= fechaFin`.
+</ParamField>
+
+#### Example Request
+
+```bash
+curl "https://your-app.com/api/balance-comprobacion?idEmpresa=1&idLibro=1&fechaInicio=2024-01-01&fechaFin=2024-03-31"
+```
+
+#### Response
+
+The response is an array of rows. Every row except the last represents an individual cuenta principal. The final row always has `nombre_cuenta = 'TOTALES'` and `es_total = true`.
+
+<ResponseField name="[]" type="array">
+  Array of balance rows ordered by account code, with the TOTALES row last.
+  <Expandable title="Balance row fields">
+    <ResponseField name="codigo_cuenta" type="string | null">
+      The main account code (e.g. `"1"`, `"4"`). `null` on the TOTALES row.
+    </ResponseField>
+    <ResponseField name="nombre_cuenta" type="string">
+      Human-readable account name. The last row always returns `"TOTALES"`.
+    </ResponseField>
+    <ResponseField name="sumas_debe" type="number">
+      Sum of all debit amounts recorded for this account in the period. Rounded to 2 decimal places.
+    </ResponseField>
+    <ResponseField name="sumas_haber" type="number">
+      Sum of all credit amounts recorded for this account in the period. Rounded to 2 decimal places.
+    </ResponseField>
+    <ResponseField name="saldo_deudor" type="number">
+      Net debit balance (`sumas_debe - sumas_haber` if positive, else `0`).
+    </ResponseField>
+    <ResponseField name="saldo_acreedor" type="number">
+      Net credit balance (`sumas_haber - sumas_debe` if positive, else `0`).
+    </ResponseField>
+    <ResponseField name="es_total" type="boolean">
+      `false` for regular account rows; `true` only on the TOTALES row.
+    </ResponseField>
+    <ResponseField name="cuadra" type="boolean | null">
+      `null` for regular rows. On the TOTALES row: `true` if `saldo_deudor == saldo_acreedor` (books balance), `false` otherwise.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Sample Response
+
+```json
+[
+  {
+    "codigo_cuenta": "1",
+    "nombre_cuenta": "ACTIVO CORRIENTE",
+    "sumas_debe": 1500.00,
+    "sumas_haber": 300.00,
+    "saldo_deudor": 1200.00,
+    "saldo_acreedor": 0.00,
+    "es_total": false,
+    "cuadra": null
+  },
+  {
+    "codigo_cuenta": "4",
+    "nombre_cuenta": "INGRESOS",
+    "sumas_debe": 0.00,
+    "sumas_haber": 1200.00,
+    "saldo_deudor": 0.00,
+    "saldo_acreedor": 1200.00,
+    "es_total": false,
+    "cuadra": null
+  },
+  {
+    "codigo_cuenta": null,
+    "nombre_cuenta": "TOTALES",
+    "sumas_debe": 1500.00,
+    "sumas_haber": 1500.00,
+    "saldo_deudor": 1200.00,
+    "saldo_acreedor": 1200.00,
+    "es_total": true,
+    "cuadra": true
+  }
+]
+```
+
+---
+
+## Reading the TOTALES Row
+
+<CardGroup cols={2}>
+  <Card title="cuadra: true" icon="circle-check">
+    `saldo_deudor === saldo_acreedor`. The books are in balance — no unmatched entries or data integrity issues detected.
+  </Card>
+  <Card title="cuadra: false" icon="circle-xmark">
+    `saldo_deudor !== saldo_acreedor`. There is an imbalance. Review recent asientos for lines where both `debe` and `haber` are zero, or check for any manual database edits outside the API.
+  </Card>
+</CardGroup>
+
+---
+
+## Database Function
+
+The trial balance is backed by a PostgreSQL function:
+
+```sql
+SELECT * FROM public.balance_comprobacion(
+  p_id_empresa  BIGINT,
+  p_id_libro    BIGINT,
+  p_fecha_inicio DATE,   -- nullable
+  p_fecha_fin    DATE
+);
+```
+
+The function validates libro ownership and raises `P0001` if the libro does not belong to the empresa, ensuring tenant isolation.

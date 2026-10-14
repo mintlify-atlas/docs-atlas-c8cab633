@@ -1,0 +1,118 @@
+---
+title: "Transaction History API — GET /api/historial"
+sidebarTitle: "Historial"
+description: "Query all posted journal entry lines for an empresa, optionally scoped to a single libro diario, from the vw_historial_asientos view."
+---
+
+The historial endpoint exposes a read-only view of every posted journal entry line for a given empresa. Results are sourced from the `vw_historial_asientos` database view, which joins asientos, their detail lines, and the chart-of-accounts hierarchy in a single denormalised row set — making it easy to render a full transaction ledger without additional client-side joins.
+
+---
+
+## GET /api/historial
+
+Returns an array of entry lines ordered by `idLibro DESC, idAsiento DESC` (most recent entries first). Each row represents a single debit or credit line within a journal entry.
+
+### Query Parameters
+
+<ParamField query="idEmpresa" type="integer" required>
+  Positive integer identifying the empresa whose asientos should be returned. The controller cross-joins through `libros_diarios` to ensure only books belonging to this empresa are included.
+</ParamField>
+
+<ParamField query="idLibro" type="integer">
+  Optional. When provided, filters results to the single *libro diario* with this ID. Must be a positive integer. The libro must belong to the specified `idEmpresa`; if it belongs to a different empresa, zero rows are returned (no `404` is raised).
+</ParamField>
+
+<Note>
+  Omitting `idLibro` returns all asiento lines across **every libro** that belongs to the empresa, ordered newest-first. This is useful for a company-wide general ledger view.
+</Note>
+
+### Response
+
+Returns a JSON array. Each element is one detail line from a journal entry.
+
+<ResponseField name="IdLibro" type="integer">
+  ID of the *libro diario* this entry belongs to.
+</ResponseField>
+
+<ResponseField name="IdAsiento" type="integer">
+  Unique identifier of the journal entry within its libro.
+</ResponseField>
+
+<ResponseField name="Fecha" type="string">
+  Entry date in ISO 8601 format (e.g. `"2024-07-15T00:00:00.000Z"`).
+</ResponseField>
+
+<ResponseField name="Descripcion" type="string">
+  Free-text description recorded at the time the entry was posted. May be `null` if no description was provided.
+</ResponseField>
+
+<ResponseField name="CodigoSubcuenta" type="string">
+  Subcuenta code for this line (e.g. `"1101-01"`). Matches `CodigoSubcuenta` from `GET /api/cuentas`.
+</ResponseField>
+
+<ResponseField name="CuentaPrincipal" type="string">
+  Name of the parent cuenta principal (e.g. `"ACTIVO CORRIENTE"`).
+</ResponseField>
+
+<ResponseField name="Debe" type="number">
+  Debit amount for this line. `0` if the line is a credit.
+</ResponseField>
+
+<ResponseField name="Haber" type="number">
+  Credit amount for this line. `0` if the line is a debit.
+</ResponseField>
+
+### Error Responses
+
+**400 — Invalid identifiers**
+```json
+{
+  "error": "Identificadores inválidos"
+}
+```
+
+**500 — Internal server error**
+```json
+{
+  "error": "Error al cargar el historial de asientos"
+}
+```
+
+### Examples
+
+**All asientos for empresa 1**
+
+```bash
+curl "https://api.contafacil.app/api/historial?idEmpresa=1"
+```
+
+**Scoped to a single libro**
+
+```bash
+curl "https://api.contafacil.app/api/historial?idEmpresa=1&idLibro=3"
+```
+
+```json
+[
+  {
+    "IdLibro": 3,
+    "IdAsiento": 47,
+    "Fecha": "2024-07-15T00:00:00.000Z",
+    "Descripcion": "Venta al contado factura #1042",
+    "CodigoSubcuenta": "1101-01",
+    "CuentaPrincipal": "ACTIVO CORRIENTE",
+    "Debe": 250.00,
+    "Haber": 0.00
+  },
+  {
+    "IdLibro": 3,
+    "IdAsiento": 47,
+    "Fecha": "2024-07-15T00:00:00.000Z",
+    "Descripcion": "Venta al contado factura #1042",
+    "CodigoSubcuenta": "4101-01",
+    "CuentaPrincipal": "INGRESOS",
+    "Debe": 0.00,
+    "Haber": 250.00
+  }
+]
+```

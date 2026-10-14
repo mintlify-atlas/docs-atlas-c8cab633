@@ -1,0 +1,106 @@
+---
+title: "ContaFácil — Full-Stack Accounting SaaS for Your Team"
+sidebarTitle: "Introduction"
+description: "ContaFácil is a Node.js and Supabase PostgreSQL SaaS that covers the full accounting cycle with multi-company support out of the box."
+---
+
+ContaFácil puts the entire bookkeeping workflow in one lightweight web application: from the first journal entry all the way through to audited financial statements. Accountants and small-business owners interact through a zero-installation browser UI, while a clean REST API makes it straightforward to integrate ContaFácil with external tools or build custom front-ends on top of it.
+
+## What ContaFácil Does
+
+ContaFácil covers the **complete accounting cycle** for one or more companies registered in the same instance:
+
+| Stage | Module |
+|---|---|
+| Chart of accounts & journal setup | Libros Diarios |
+| Double-entry journal entries | Asientos |
+| Ledger roll-up per account | Mayorización |
+| Trial balance | Balance de Comprobación |
+| Income statement | Estado de Resultados |
+| Balance sheet | Balance General |
+| Perpetual inventory control | Kardex |
+
+Multi-company support is built-in from the data model up. Every record is scoped to an `id_empresa`, so a single deployment serves multiple independent organizations without any data bleed between them.
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Runtime | Node.js ≥ 22 (CommonJS) |
+| Web framework | Express 5 |
+| Database | PostgreSQL via Supabase (Session pooler) |
+| DB driver | `pg` (node-postgres) 8.x |
+| Cross-origin | `cors` middleware |
+| Config | `dotenv` 18.x |
+
+The `pg.Pool` is configured with `ssl: { rejectUnauthorized: false }` to reach Supabase's managed PostgreSQL over TLS. A lightweight MySQL-to-PostgreSQL adapter inside `db.js` translates legacy `?` placeholders to numbered `$n` parameters at runtime, keeping older query strings compatible without a rewrite.
+
+## Modules
+
+<CardGroup cols={2}>
+  <Card title="Libros Diarios" icon="book" href="/modules/libros-diarios">
+    Create and manage named journal books per company. Each libro groups a set of asientos under a distinct accounting period or purpose.
+  </Card>
+  <Card title="Asientos" icon="pen-to-square" href="/modules/asientos">
+    Record double-entry journal entries (asientos contables) against any active libro. Debits and credits are validated before persistence.
+  </Card>
+  <Card title="Mayorización" icon="table-columns" href="/modules/mayorizacion">
+    Aggregate all asientos by account (cuenta) to produce a running ledger. Filter by company, libro, and date range.
+  </Card>
+  <Card title="Balance de Comprobación" icon="scale-balanced" href="/modules/balance-comprobacion">
+    Generate a trial balance that verifies total debits equal total credits across all accounts for the selected period.
+  </Card>
+  <Card title="Estado de Resultados" icon="chart-line" href="/modules/estado-resultados">
+    Compute revenues, costs, and expenses to produce a period income statement ready for management review.
+  </Card>
+  <Card title="Balance General" icon="building-columns" href="/modules/balance-general">
+    Produce the full balance sheet — assets, liabilities, and equity — derived from the ledger at any point in time.
+  </Card>
+  <Card title="Kardex" icon="boxes-stacked" href="/modules/kardex">
+    Perpetual inventory control per article and company. Register inflows, outflows, and adjustments; query running stock balances.
+  </Card>
+  <Card title="Empresa & Usuarios" icon="user-tie" href="/setup/company">
+    Register companies and their admin users. Each company gets its own isolated dataset and credentials via `/api/registro`.
+  </Card>
+</CardGroup>
+
+## Architecture
+
+```
+┌─────────────────────────────────────────┐
+│              Browser (UI)               │
+│   static HTML + JS served from /public  │
+└────────────────────┬────────────────────┘
+                     │ HTTP
+┌────────────────────▼────────────────────┐
+│         Express 5 REST API              │
+│  server.js → app.use('/api', routes)    │
+│                                         │
+│  Middleware stack:                      │
+│   cors() → express.json() →            │
+│   express.static('public') →           │
+│   /api/* routes                         │
+└────────────────────┬────────────────────┘
+                     │ pg.Pool (TLS)
+┌────────────────────▼────────────────────┐
+│   Supabase PostgreSQL (Session pooler)  │
+│   host: *.pooler.supabase.com:5432      │
+│   max pool size: 10 connections         │
+└─────────────────────────────────────────┘
+```
+
+**Frontend** — A static single-page application lives in `/public` and is served directly by Express via `express.static`. Cache headers are set to `no-store` so users always receive the latest assets. No separate front-end build step is required.
+
+**Backend** — All business logic is handled by controllers in `/controllers` and exposed through a single Express `Router` mounted at `/api`. The router handles authentication (`/api/login`, `/api/registro`), accounting modules, and the health endpoint.
+
+**Database** — ContaFácil connects to Supabase's **Session pooler** (port `5432`) rather than the transaction pooler, which is necessary because the application uses multi-statement transactions (e.g. `BEGIN / COMMIT` during company registration).
+
+## Security Considerations
+
+<Note>
+  **Keep your `.env` file private.** The `.gitignore` already excludes it from version control, but you must never commit or share the `SUPABASE_DB_URL` value — it contains your database password in the connection string.
+</Note>
+
+<Warning>
+  **Passwords are stored in plain text.** The current implementation inserts and queries user passwords as-is in the `public.usuarios` table. Before exposing ContaFácil to the internet or any production audience, replace the plain-text storage with a proper hashing scheme such as **bcrypt** or **argon2**.
+</Warning>

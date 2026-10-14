@@ -1,0 +1,263 @@
+---
+title: "Inventory Control with Kardex in ContaFácil"
+sidebarTitle: "Kardex"
+description: "Track perpetual inventory movements using the weighted average cost method (Kardex) with ContaFácil's inventory control module."
+---
+
+## What is the Kardex?
+
+The **Kardex** is a perpetual inventory register that tracks every stock movement — entries and exits — for each article. ContaFácil uses the **weighted average cost method** (costo promedio ponderado): whenever stock is added, the system recalculates the average unit cost; whenever stock is removed, it uses the current running average as the unit cost.
+
+Each kardex row represents a single movement and records both the transaction amounts **and** the running inventory balances after that movement, making it easy to reconstruct the inventory position at any point in time.
+
+---
+
+## Data Model
+
+| Field | Type | Description |
+|---|---|---|
+| `id_movimiento` | bigint | Auto-generated primary key |
+| `codigo_articulo` | text | Article code (normalized to uppercase) |
+| `fecha` | date | Date of the movement |
+| `concepto` | text | Auto-composed as `"{cuenta_contable} - {concepto}"` |
+| `tipo_movimiento` | text | See movement types below |
+| `cantidad` | numeric | Units moved in this transaction |
+| `costo_unitario` | numeric | Unit cost applied to this movement (4 decimal places) |
+| `costo_total` | numeric | `cantidad × costo_unitario` (2 decimal places) |
+| `saldo_cantidad` | numeric | Running stock quantity after this movement |
+| `saldo_costo_unitario` | numeric | Running weighted average unit cost after this movement (4 decimal places) |
+| `saldo_total` | numeric | Running total inventory value after this movement (2 decimal places) |
+| `id_empresa` | integer | ID of the owning empresa |
+
+### Movement Types
+
+The `tipo_movimiento` field accepts exactly five values (enforced by a `CHECK` constraint):
+
+| Type | Effect on Stock | Cost Basis |
+|---|---|---|
+| `INVENTARIO_INICIAL` | Adds to stock | Provided price |
+| `COMPRA` | Adds to stock | Provided price |
+| `DEV_VENTA` | Adds to stock (return from customer) | Provided price |
+| `VENTA` | Deducts from stock | Weighted average (`saldo_total / saldo_cantidad`) |
+| `DEV_COMPRA` | Deducts from stock (return to supplier) | Provided price |
+
+---
+
+## Cost Calculation Logic
+
+<Steps>
+  <Step title="Retrieve the last balance">
+    The server fetches the most recent kardex row for `(codigo_articulo, id_empresa)` to obtain the current `saldo_cantidad` and `saldo_total`.
+  </Step>
+  <Step title="Apply IVA adjustment">
+    If `condicion_iva = 'incluido'`, the provided price is divided by `1.13` to strip the tax before computing costs. Otherwise, the price is used as-is.
+  </Step>
+  <Step title="Compute movement amounts">
+    - **COMPRA / INVENTARIO_INICIAL / DEV_VENTA**: `costo_unitario = precio_real`, `costo_total = cantidad × precio_real`. Stock **increases**.
+    - **VENTA**: `costo_unitario = saldo_total / saldo_cantidad` (weighted average). Stock **decreases**.
+    - **DEV_COMPRA**: `costo_unitario = precio_real`. Stock **decreases**.
+  </Step>
+  <Step title="Update running balances">
+    New `saldo_cantidad` and `saldo_total` are computed. The new weighted average is `saldo_total / saldo_cantidad` (or `0` if stock reaches zero).
+  </Step>
+  <Step title="Persist the movement">
+    The complete row is inserted into the `kardex` table, including the updated running balances.
+  </Step>
+</Steps>
+
+---
+
+## API Reference
+
+### Register a Kardex Movement
+
+**`POST /api/kardex`**
+
+<ParamField body="id_empresa" type="integer" required>
+  ID of the empresa. Required for multi-tenant isolation.
+</ParamField>
+
+<ParamField body="fecha_movimiento" type="string" required>
+  Date of the movement in `YYYY-MM-DD` format. Cannot be earlier than the date of the last recorded movement for the same article.
+</ParamField>
+
+<ParamField body="articulo" type="string" required>
+  Article code (e.g. `"PROD-001"`). Automatically normalized to uppercase and trimmed.
+</ParamField>
+
+<ParamField body="cuenta_contable" type="string" required>
+  Accounting account code or label. Prepended to the `concepto` field: `"{cuenta_contable} - {concepto}"`.
+</ParamField>
+
+<ParamField body="concepto" type="string" required>
+  Description of the movement (e.g. `"Compra según factura #0042"`).
+</ParamField>
+
+<ParamField body="tipo_movimiento" type="string" required>
+  One of: `INVENTARIO_INICIAL`, `COMPRA`, `VENTA`, `DEV_COMPRA`, `DEV_VENTA`.
+</ParamField>
+
+<ParamField body="cantidad" type="number" required>
+  Number of units involved in the movement. Must be positive.
+</ParamField>
+
+<ParamField body="precio_ingresado" type="number" required>
+  Unit price to apply. For VENTA movements, the weighted average cost is used instead — but a price must still be provided (it is ignored for VENTA calculations).
+</ParamField>
+
+<ParamField body="condicion_iva" type="string" required>
+  IVA handling: `'incluido'` to strip IVA (divide by `1.13`) before computing costs, or any other value (e.g. `'excluido'`) to use the price as-is.
+</ParamField>
+
+#### Example — Register a COMPRA
+
+```bash
+curl -X POST "https://your-app.com/api/kardex" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_empresa": 1,
+    "fecha_movimiento": "2024-03-01",
+    "articulo": "PROD-001",
+    "cuenta_contable": "1301",
+    "concepto": "Compra según factura #0042",
+    "tipo_movimiento": "COMPRA",
+    "cantidad": 100,
+    "precio_ingresado": 11.30,
+    "condicion_iva": "incluido"
+  }'
+```
+
+**Response `201 Created`**
+
+<ResponseField name="mensaje" type="string">
+  Confirmation that the movement was registered.
+</ResponseField>
+
+```json
+{ "mensaje": "Movimiento registrado correctamente" }
+```
+
+**Error — Date constraint**
+
+```json
+{ "error": "La fecha no puede ser menor al último movimiento de este artículo." }
+```
+
+**Error — Insufficient stock (for VENTA / DEV_COMPRA)**
+
+```json
+{ "error": "Stock insuficiente de PROD-001." }
+```
+
+---
+
+### Get Kardex History
+
+**`GET /api/kardex/:filtro/:id_empresa`**
+
+Returns all movements for the empresa, optionally filtered by article code.
+
+<ParamField path="filtro" type="string" required>
+  Article code to filter by (e.g. `"PROD-001"`), or `"GLOBAL"` to return movements for **all** articles in the empresa.
+</ParamField>
+
+<ParamField path="id_empresa" type="integer" required>
+  ID of the empresa.
+</ParamField>
+
+#### Example — Single Article
+
+```bash
+curl "https://your-app.com/api/kardex/PROD-001/1"
+```
+
+#### Example — All Articles
+
+```bash
+curl "https://your-app.com/api/kardex/GLOBAL/1"
+```
+
+**Response `200 OK`**
+
+```json
+[
+  {
+    "id_movimiento": 1,
+    "codigo_articulo": "PROD-001",
+    "fecha": "2024-03-01",
+    "concepto": "1301 - Compra según factura #0042",
+    "tipo_movimiento": "COMPRA",
+    "cantidad": 100,
+    "costo_unitario": 10.0000,
+    "costo_total": 1000.00,
+    "saldo_cantidad": 100,
+    "saldo_costo_unitario": 10.0000,
+    "saldo_total": 1000.00,
+    "id_empresa": 1
+  },
+  {
+    "id_movimiento": 2,
+    "codigo_articulo": "PROD-001",
+    "fecha": "2024-03-10",
+    "concepto": "4101 - Venta factura #0010",
+    "tipo_movimiento": "VENTA",
+    "cantidad": 30,
+    "costo_unitario": 10.0000,
+    "costo_total": 300.00,
+    "saldo_cantidad": 70,
+    "saldo_costo_unitario": 10.0000,
+    "saldo_total": 700.00,
+    "id_empresa": 1
+  }
+]
+```
+
+---
+
+### List Unique Article Codes
+
+**`GET /api/kardex-articulos/:id_empresa`**
+
+Returns a list of distinct `codigo_articulo` values that have at least one movement recorded for the empresa.
+
+<ParamField path="id_empresa" type="integer" required>
+  ID of the empresa.
+</ParamField>
+
+```bash
+curl "https://your-app.com/api/kardex-articulos/1"
+```
+
+**Response `200 OK`**
+
+```json
+["PROD-001", "PROD-002", "MAT-PRIMA-A"]
+```
+
+---
+
+### Delete (Void) a Kardex Movement
+
+**`DELETE /api/kardex/:id_movimiento/:id_empresa`**
+
+<Warning>
+  This endpoint **permanently deletes** the movement row from the `kardex` table. There is no reversal entry or audit trail created. Deleting a movement does **not** recalculate the running balances of subsequent rows — use this operation only to remove the most recent movement for an article, and only when no downstream movements depend on it. Use with caution in production environments.
+</Warning>
+
+<ParamField path="id_movimiento" type="integer" required>
+  ID of the movement to delete.
+</ParamField>
+
+<ParamField path="id_empresa" type="integer" required>
+  ID of the empresa. Used to prevent cross-tenant deletions.
+</ParamField>
+
+```bash
+curl -X DELETE "https://your-app.com/api/kardex/2/1"
+```
+
+**Response `200 OK`**
+
+```json
+{ "mensaje": "Movimiento anulado" }
+```

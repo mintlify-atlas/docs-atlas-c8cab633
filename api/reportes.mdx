@@ -1,0 +1,282 @@
+---
+title: "Financial Reports API — Estado de Resultados & Balance General"
+sidebarTitle: "Reportes"
+description: "Generate income statements, balance sheet summaries, and a trial balance for any date range directly from ContaFácil's ledger view."
+---
+
+This page documents the three financial-reporting endpoints in ContaFácil. **Estado de Resultados** (`GET /api/estado-resultados`) summarises income and expense accounts; **Balance de Cuentas** (`GET /api/balance-cuentas`) summarises asset, liability, and equity accounts; and **Balance de Comprobación** (`GET /api/balance-comprobacion`) produces a full trial balance via a dedicated PostgreSQL function, including a final TOTALES row that confirms whether the books balance.
+
+---
+
+## GET /api/estado-resultados
+
+Returns aggregated debit and credit totals for all accounts whose `codigo_subcuenta` begins with `'4'` (ingresos) or `'5'` (egresos) within the specified libro and date range. Rows are grouped by the first four characters of the subcuenta code and the name of the cuenta principal.
+
+### Query Parameters
+
+<ParamField query="idLibro" type="integer" required>
+  ID of the *libro diario* to report on.
+</ParamField>
+
+<ParamField query="fechaInicio" type="string" required>
+  Start date of the reporting period in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  End date of the reporting period in `YYYY-MM-DD` format.
+</ParamField>
+
+### Response
+
+Returns a JSON array ordered by `CodigoMayor` ascending.
+
+<ResponseField name="CodigoMayor" type="string">
+  First four characters of the subcuenta code, used as the aggregation key (e.g. `"4101"`). Computed via `SUBSTRING(codigo_subcuenta, 1, 4)`.
+</ResponseField>
+
+<ResponseField name="NombreCuenta" type="string">
+  Name of the cuenta principal for this group (e.g. `"INGRESOS POR VENTAS"`).
+</ResponseField>
+
+<ResponseField name="TotalDebe" type="number">
+  Sum of all debit amounts for this cuenta group within the period.
+</ResponseField>
+
+<ResponseField name="TotalHaber" type="number">
+  Sum of all credit amounts for this cuenta group within the period.
+</ResponseField>
+
+### Error Responses
+
+**400 — Missing parameters**
+```json
+{
+  "error": "Faltan parámetros de filtrado"
+}
+```
+
+### Example
+
+```bash
+curl "https://api.contafacil.app/api/estado-resultados?idLibro=3&fechaInicio=2024-01-01&fechaFin=2024-12-31"
+```
+
+```json
+[
+  {
+    "CodigoMayor": "4101",
+    "NombreCuenta": "INGRESOS POR VENTAS",
+    "TotalDebe": 0.00,
+    "TotalHaber": 85000.00
+  },
+  {
+    "CodigoMayor": "5101",
+    "NombreCuenta": "COSTO DE VENTAS",
+    "TotalDebe": 52000.00,
+    "TotalHaber": 0.00
+  }
+]
+```
+
+---
+
+## GET /api/balance-cuentas
+
+Returns aggregated debit and credit totals for all accounts whose `codigo_subcuenta` begins with `'1'` (activos), `'2'` (pasivos), or `'3'` (patrimonio) within the specified libro and date range. The structure and grouping logic mirror `GET /api/estado-resultados`.
+
+### Query Parameters
+
+<ParamField query="idLibro" type="integer" required>
+  ID of the *libro diario* to report on.
+</ParamField>
+
+<ParamField query="fechaInicio" type="string" required>
+  Start date of the reporting period in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  End date of the reporting period in `YYYY-MM-DD` format.
+</ParamField>
+
+### Response
+
+Returns a JSON array ordered by `CodigoMayor` ascending.
+
+<ResponseField name="CodigoMayor" type="string">
+  First four characters of the subcuenta code (e.g. `"1101"`).
+</ResponseField>
+
+<ResponseField name="NombreCuenta" type="string">
+  Name of the cuenta principal for this group (e.g. `"ACTIVO CORRIENTE"`).
+</ResponseField>
+
+<ResponseField name="TotalDebe" type="number">
+  Sum of all debit amounts for this cuenta group within the period.
+</ResponseField>
+
+<ResponseField name="TotalHaber" type="number">
+  Sum of all credit amounts for this cuenta group within the period.
+</ResponseField>
+
+### Error Responses
+
+**400 — Missing parameters**
+```json
+{
+  "error": "Faltan parámetros de filtrado"
+}
+```
+
+### Example
+
+```bash
+curl "https://api.contafacil.app/api/balance-cuentas?idLibro=3&fechaInicio=2024-01-01&fechaFin=2024-12-31"
+```
+
+```json
+[
+  {
+    "CodigoMayor": "1101",
+    "NombreCuenta": "ACTIVO CORRIENTE",
+    "TotalDebe": 120000.00,
+    "TotalHaber": 35000.00
+  },
+  {
+    "CodigoMayor": "2101",
+    "NombreCuenta": "PASIVO CORRIENTE",
+    "TotalDebe": 5000.00,
+    "TotalHaber": 40000.00
+  },
+  {
+    "CodigoMayor": "3101",
+    "NombreCuenta": "CAPITAL SOCIAL",
+    "TotalDebe": 0.00,
+    "TotalHaber": 50000.00
+  }
+]
+```
+
+---
+
+## GET /api/balance-comprobacion
+
+Produces a full trial balance by calling the `balance_comprobacion(p_id_empresa, p_id_libro, p_fecha_inicio, p_fecha_fin)` PostgreSQL function. The function groups movements by cuenta principal, calculates running debit and credit sums, derives the deudor/acreedor saldo for each account, and appends a final **TOTALES** summary row.
+
+### Query Parameters
+
+<ParamField query="idEmpresa" type="integer" required>
+  Positive integer identifying the empresa. The stored function validates that `idLibro` belongs to this empresa before executing.
+</ParamField>
+
+<ParamField query="idLibro" type="integer" required>
+  ID of the *libro diario* to include in the trial balance.
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  Cut-off date in `YYYY-MM-DD` format. All entries with `fecha <= fechaFin` are included (subject to `fechaInicio` when provided).
+</ParamField>
+
+<ParamField query="fechaInicio" type="string">
+  Optional lower bound in `YYYY-MM-DD` format. When omitted, the function includes all entries from the beginning of the libro up to `fechaFin`. Must not be later than `fechaFin` when provided.
+</ParamField>
+
+### Response
+
+Returns a JSON array. Account rows come first (ordered by `codigo_cuenta`), followed by one final TOTALES row.
+
+<ResponseField name="codigo_cuenta" type="string">
+  Code of the cuenta principal. `null` on the TOTALES row.
+</ResponseField>
+
+<ResponseField name="nombre_cuenta" type="string">
+  Name of the cuenta principal (e.g. `"ACTIVO CORRIENTE"`), or the literal string `"TOTALES"` on the summary row.
+</ResponseField>
+
+<ResponseField name="sumas_debe" type="number">
+  Total debits for this account (rounded to 2 decimal places), or the sum of all accounts on the TOTALES row.
+</ResponseField>
+
+<ResponseField name="sumas_haber" type="number">
+  Total credits for this account (rounded to 2 decimal places), or the sum of all accounts on the TOTALES row.
+</ResponseField>
+
+<ResponseField name="saldo_deudor" type="number">
+  Net debit balance (`MAX(sumas_debe - sumas_haber, 0)`). Zero when the account has a credit balance.
+</ResponseField>
+
+<ResponseField name="saldo_acreedor" type="number">
+  Net credit balance (`MAX(sumas_haber - sumas_debe, 0)`). Zero when the account has a debit balance.
+</ResponseField>
+
+<ResponseField name="es_total" type="boolean">
+  `false` for regular account rows; `true` only on the TOTALES row.
+</ResponseField>
+
+<ResponseField name="cuadra" type="boolean">
+  Present only on the TOTALES row (`es_total = true`). `true` when `saldo_deudor = saldo_acreedor` across all accounts, confirming the trial balance is in equilibrium. `null` on all other rows.
+</ResponseField>
+
+<Note>
+  The last element of the response array is always the **TOTALES** row (`es_total: true`). Check `cuadra: true` on this row to confirm the trial balance is in equilibrium before generating final financial statements.
+</Note>
+
+<Warning>
+  If `idLibro` does not belong to `idEmpresa`, the stored function raises a `P0001` exception. The API surfaces this as an HTTP `400` with the message `"El libro especificado no existe o no pertenece a la empresa"`.
+</Warning>
+
+### Error Responses
+
+**400 — Missing or invalid parameters**
+```json
+{
+  "error": "Empresa, libro y fecha de corte son obligatorios"
+}
+```
+
+**400 — P0001 from stored procedure**
+```json
+{
+  "error": "El libro especificado no existe o no pertenece a la empresa"
+}
+```
+
+### Example
+
+```bash
+curl "https://api.contafacil.app/api/balance-comprobacion?idEmpresa=1&idLibro=3&fechaInicio=2024-01-01&fechaFin=2024-12-31"
+```
+
+```json
+[
+  {
+    "codigo_cuenta": "11",
+    "nombre_cuenta": "ACTIVO CORRIENTE",
+    "sumas_debe": 120000.00,
+    "sumas_haber": 35000.00,
+    "saldo_deudor": 85000.00,
+    "saldo_acreedor": 0.00,
+    "es_total": false,
+    "cuadra": null
+  },
+  {
+    "codigo_cuenta": "41",
+    "nombre_cuenta": "INGRESOS",
+    "sumas_debe": 0.00,
+    "sumas_haber": 85000.00,
+    "saldo_deudor": 0.00,
+    "saldo_acreedor": 85000.00,
+    "es_total": false,
+    "cuadra": null
+  },
+  {
+    "codigo_cuenta": null,
+    "nombre_cuenta": "TOTALES",
+    "sumas_debe": 120000.00,
+    "sumas_haber": 120000.00,
+    "saldo_deudor": 85000.00,
+    "saldo_acreedor": 85000.00,
+    "es_total": true,
+    "cuadra": true
+  }
+]
+```

@@ -1,72 +1,71 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "ContaFácil",
+  "theme": "almond",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
-  },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "primary": "#2E7D32",
+    "light": "#4CAF50",
+    "dark": "#1B5E20"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:support@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/GersonBarrientos/ContaFacil"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/GersonBarrientos/ContaFacil"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guía",
+        "groups": [
+          {
+            "group": "Introducción",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Configuración",
+            "pages": ["setup/installation", "setup/database", "setup/company"]
+          },
+          {
+            "group": "Módulos Contables",
+            "pages": [
+              "modules/libros-diarios",
+              "modules/asientos",
+              "modules/mayorizacion",
+              "modules/balance-comprobacion",
+              "modules/estado-resultados",
+              "modules/balance-general",
+              "modules/kardex"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Autenticación",
+            "pages": ["api/auth"]
+          },
+          {
+            "group": "Empresa & Libros",
+            "pages": ["api/empresa", "api/libros"]
+          },
+          {
+            "group": "Contabilidad",
+            "pages": ["api/asientos", "api/historial", "api/mayorizacion", "api/reportes"]
+          },
+          {
+            "group": "Kardex",
+            "pages": ["api/kardex"]
+          }
+        ]
+      }
+    ]
   }
 }

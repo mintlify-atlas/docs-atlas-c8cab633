@@ -1,0 +1,155 @@
+---
+title: "Ledger Posting (Mayorización) by Account and Period"
+sidebarTitle: "Mayorización"
+description: "Query the mayorización (ledger posting) to group all journal movements by account and date range in ContaFácil."
+---
+
+## What is Mayorización?
+
+**Mayorización** (ledger posting) is the process of transferring and grouping every line from the libro diario into individual account ledger pages — the **libro mayor**. In practice, it answers the question: *"What is the full movement history of each account within a given period?"*
+
+In ContaFácil, the mayorización query pulls from the `vw_historial_asientos` view, joined with `subcuentas` to resolve account names, and groups the results by `codigo_cuenta` (the main account code). Each row in the response represents a single detail line from an asiento, enriched with account and book metadata.
+
+Common uses:
+- Verifying all movements of a specific account (e.g. Caja, Cuentas por Cobrar).
+- Feeding data into the balance de comprobación.
+- Auditing entries within a fiscal sub-period.
+
+---
+
+## API Reference
+
+### Get Mayorización
+
+**`GET /api/mayorizacion`**
+
+Returns all ledger movements for a given empresa and date range, optionally filtered to a single libro diario.
+
+<Note>
+  Omitting `idLibro` returns movements from **all libros diarios** that belong to the empresa within the specified date range. Pass `idLibro` to restrict results to a single book.
+</Note>
+
+#### Query Parameters
+
+<ParamField query="idEmpresa" type="integer" required>
+  ID of the empresa. Must be a positive integer.
+</ParamField>
+
+<ParamField query="fechaInicio" type="string" required>
+  Start date of the reporting period in `YYYY-MM-DD` format (inclusive).
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  End date of the reporting period in `YYYY-MM-DD` format (inclusive). Must be `>= fechaInicio`.
+</ParamField>
+
+<ParamField query="idLibro" type="integer">
+  Optional. When provided, only movements from this specific libro diario are returned. The libro must belong to `idEmpresa`.
+</ParamField>
+
+#### Example Request
+
+```bash
+curl "https://your-app.com/api/mayorizacion?idEmpresa=1&fechaInicio=2024-01-01&fechaFin=2024-03-31&idLibro=1"
+```
+
+#### Response
+
+<ResponseField name="[]" type="array">
+  Array of mayorización rows, ordered by `codigo_cuenta`, `fecha`, and `id_asiento`.
+  <Expandable title="Mayorización row fields">
+    <ResponseField name="codigo_cuenta" type="string">
+      The main account code (e.g. `"1"`, `"11"`). Groups related subcuentas together.
+    </ResponseField>
+    <ResponseField name="cuenta" type="string">
+      Name of the cuenta principal (e.g. `"ACTIVO CORRIENTE"`). Sourced from `vw_historial_asientos.cuenta_principal`.
+    </ResponseField>
+    <ResponseField name="fecha" type="string">
+      Date of the asiento in `YYYY-MM-DD` format.
+    </ResponseField>
+    <ResponseField name="descripcion" type="string">
+      Description of the asiento header.
+    </ResponseField>
+    <ResponseField name="id_asiento" type="integer">
+      ID of the source asiento.
+    </ResponseField>
+    <ResponseField name="subcuenta" type="string">
+      Name of the subcuenta referenced by the detail line (`nombre_subcuenta`).
+    </ResponseField>
+    <ResponseField name="debe" type="number">
+      Debit amount for this line. Zero if the line is a credit entry.
+    </ResponseField>
+    <ResponseField name="haber" type="number">
+      Credit amount for this line. Zero if the line is a debit entry.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json
+[
+  {
+    "codigo_cuenta": "1",
+    "cuenta": "ACTIVO CORRIENTE",
+    "fecha": "2024-01-10",
+    "descripcion": "Venta al contado factura #001",
+    "id_asiento": 12,
+    "subcuenta": "Caja General",
+    "debe": 500.00,
+    "haber": 0
+  },
+  {
+    "codigo_cuenta": "4",
+    "cuenta": "INGRESOS",
+    "fecha": "2024-01-10",
+    "descripcion": "Venta al contado factura #001",
+    "id_asiento": 12,
+    "subcuenta": "Ingresos por Ventas",
+    "debe": 0,
+    "haber": 500.00
+  },
+  {
+    "codigo_cuenta": "5",
+    "cuenta": "GASTOS",
+    "fecha": "2024-02-05",
+    "descripcion": "Pago de alquiler - Febrero",
+    "id_asiento": 18,
+    "subcuenta": "Gasto Arrendamiento",
+    "debe": 300.00,
+    "haber": 0
+  }
+]
+```
+
+---
+
+## Understanding the Results
+
+<CardGroup cols={2}>
+  <Card title="Grouped by Account" icon="table-list">
+    Results are ordered by `codigo_cuenta` first, so all movements belonging to the same main account appear together — mirroring the structure of a traditional libro mayor.
+  </Card>
+  <Card title="Chronological Within Account" icon="calendar">
+    Within each account, movements are ordered by `fecha` and then `id_asiento`, giving you an auditable, time-ordered trail of every transaction.
+  </Card>
+</CardGroup>
+
+---
+
+## Data Source
+
+The mayorización query joins three tables via `vw_historial_asientos`:
+
+```sql
+SELECT h.codigo_cuenta, h.cuenta_principal AS cuenta,
+       h.fecha, h.descripcion, h.id_asiento,
+       s.nombre_subcuenta AS subcuenta,
+       COALESCE(h.debe, 0) AS debe,
+       COALESCE(h.haber, 0) AS haber
+FROM public.vw_historial_asientos h
+JOIN public.libros_diarios l ON l.id_libro = h.id_libro
+JOIN public.subcuentas s ON s.codigo_subcuenta = h.codigo_subcuenta
+WHERE l.id_empresa = $1
+  AND h.fecha BETWEEN $2::date AND $3::date
+  -- AND h.id_libro = $4  (only when idLibro is provided)
+ORDER BY h.codigo_cuenta, h.fecha, h.id_asiento;
+```

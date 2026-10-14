@@ -1,0 +1,126 @@
+---
+title: "Installing ContaFácil on Your Server"
+sidebarTitle: "Installation"
+description: "Step-by-step guide to clone, configure, and run ContaFácil locally or on a server using Node.js and a Supabase PostgreSQL database."
+---
+
+ContaFácil is a full-stack accounting API built on **Node.js/Express** with all data persisted in **Supabase PostgreSQL**. This guide walks you through every step — from cloning the repository to starting the server — and should take under ten minutes on any machine that meets the prerequisites.
+
+## Prerequisites
+
+Before you begin, make sure the following are available on your system:
+
+| Requirement | Version / Notes |
+|---|---|
+| **Node.js** | `>=22` (as specified in `engines` in `package.json`) |
+| **npm** | Bundled with Node.js — no separate install needed |
+| **Supabase account** | Free tier is sufficient; you only need a PostgreSQL connection string |
+| **Git** | To clone the repository |
+
+<Note>
+  Node.js 22+ is required because ContaFácil uses modern JavaScript features and depends on packages that target the current LTS release. Download the latest LTS from [nodejs.org](https://nodejs.org).
+</Note>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the ContaFácil repository from GitHub and enter the project directory:
+
+    ```bash
+    git clone https://github.com/GersonBarrientos/ContaFacil.git
+    cd ContaFacil
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install all required npm packages with a single command:
+
+    ```bash
+    npm install
+    ```
+
+    This installs the following production dependencies:
+
+    | Package | Version | Purpose |
+    |---|---|---|
+    | `express` | `^5.2.1` | HTTP server and routing |
+    | `pg` | `^8.23.0` | PostgreSQL client (used via connection pool) |
+    | `cors` | `^2.8.6` | Cross-Origin Resource Sharing middleware |
+    | `dotenv` | `^18.0.1` | Loads environment variables from `.env` |
+  </Step>
+
+  <Step title="Create your .env file">
+    Copy the provided example file to create your local environment configuration:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Open `.env` in your editor. It contains two variables:
+
+    ```env
+    PORT=3000
+    SUPABASE_DB_URL=postgresql://postgres.PROJECT_REF:DB_PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres
+    ```
+
+    <Warning>
+      **Never commit `.env` to version control.** The file is already listed in `.gitignore`, but be careful when forking or copying the project. Your `DB_PASSWORD` grants direct PostgreSQL access to your Supabase project.
+    </Warning>
+  </Step>
+
+  <Step title="Set your environment variables">
+    Edit `.env` and replace the placeholder values with your real credentials:
+
+    | Variable | Default | Description |
+    |---|---|---|
+    | `PORT` | `3000` | TCP port the Express server listens on |
+    | `SUPABASE_DB_URL` | *(required)* | Full PostgreSQL connection string from Supabase (Session pooler) |
+
+    The connection string follows this format:
+
+    ```env
+    SUPABASE_DB_URL=postgresql://postgres.PROJECT_REF:DB_PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres
+    ```
+
+    Replace `PROJECT_REF` with your Supabase project reference and `DB_PASSWORD` with the database password you set when creating the project. See [Database Setup](/setup/database) for instructions on finding this string in the Supabase dashboard.
+  </Step>
+</Steps>
+
+## Running the Server
+
+### Start
+
+```bash
+npm start
+```
+
+This runs `node server.js`. Once the server starts you should see:
+
+```
+✅ Conexión exitosa a Supabase PostgreSQL en la nube ☁️
+```
+
+The API is then available at `http://localhost:3000` (or whichever `PORT` you configured).
+
+### Syntax check
+
+```bash
+npm test
+```
+
+The test script performs a **syntax check** (no test runner required) across the five core files:
+
+```bash
+node --check server.js && \
+node --check db.js && \
+node --check models/contabilidadModel.js && \
+node --check controllers/contabilidadController.js && \
+node --check routes/index.js
+```
+
+This is useful in CI pipelines to catch parse errors before deploying without needing a live database connection.
+
+<Note>
+  `db.js` accepts **either** `SUPABASE_DB_URL` or `DATABASE_URL` as the connection string variable. `DATABASE_URL` is checked first, making it easy to integrate with platforms (such as Railway or Render) that inject that variable name automatically. Both variables refer to the same PostgreSQL connection string.
+</Note>

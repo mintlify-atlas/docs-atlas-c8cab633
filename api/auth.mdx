@@ -1,0 +1,221 @@
+---
+title: "Authentication and Registration API Reference"
+sidebarTitle: "Authentication"
+description: "Session-based login and company registration endpoints for ContaFácil, backed by Supabase PostgreSQL with plain-SQL credential checks."
+---
+
+ContaFácil uses a lightweight, **session-based authentication model** — there are no JWTs, no OAuth flows, and no refresh tokens. A successful login or registration query returns an `empresa_id` (company identifier) along with the authenticated user's email and display name. Every subsequent API call that requires company context must include this `empresa_id` as the `idEmpresa` query or body parameter. The server validates credentials by querying the `public.usuarios` table directly, matching `email`, `password`, and `estado = 'ACTIVO'` in a single SQL statement.
+
+<Note>
+  The responses from both `/api/login` and `/api/registro` include an `empresa_id` field. Your client **must** persist this value (e.g., in `localStorage` or in-memory session state) and forward it as `idEmpresa` on every subsequent request. There is no bearer token — the `empresa_id` itself is the tenant identifier used throughout the API.
+</Note>
+
+<Note>
+  There is no server-managed session cookie or token. ContaFácil does not issue authentication tokens; the client is solely responsible for storing and forwarding `empresa_id` after the initial login or registration.
+</Note>
+
+---
+
+## POST /api/login
+
+Authenticates an existing user against the `public.usuarios` table. The query checks that the provided `email` and `password` match a row where `estado = 'ACTIVO'`. On success, the response contains the company identifier and user profile needed to bootstrap the client session.
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The user's registered email address. Must match a row in `public.usuarios`.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The user's password. Currently compared in **plain text** against the stored value — see the warning below.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="ok" type="boolean">
+  Always `true` on a successful authentication.
+</ResponseField>
+
+<ResponseField name="empresa_id" type="number">
+  The numeric primary key of the company (`public.empresas.id_empresa`) the authenticated user belongs to. Store this value and pass it as `idEmpresa` on all subsequent requests.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  The authenticated user's email address, echoed back from the database row.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  The authenticated user's display name as stored in `public.usuarios.nombre`.
+</ResponseField>
+
+<Warning>
+  Passwords are stored and compared in **plain text**. This is insecure for any production deployment. Before going live, replace the plain-text comparison with a proper hashing algorithm (e.g., `bcrypt`) and update both the registration flow and this login query accordingly.
+</Warning>
+
+### Example request
+
+```bash
+curl -X POST https://your-domain.com/api/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@empresa.com",
+    "password": "s3cur3P@ss"
+  }'
+```
+
+### Example responses
+
+**200 OK — credentials matched**
+
+```json
+{
+  "ok": true,
+  "empresa_id": 7,
+  "email": "admin@empresa.com",
+  "nombre": "Admin Empresa Demo"
+}
+```
+
+**401 Unauthorized — wrong credentials or inactive user**
+
+```json
+{
+  "error": "Credenciales incorrectas"
+}
+```
+
+**500 Internal Server Error — unexpected database failure**
+
+```json
+{
+  "error": "Error interno del servidor"
+}
+```
+
+---
+
+## POST /api/registro
+
+Creates a new company and its first admin user inside a single PostgreSQL transaction. If any step fails — including a duplicate email — the entire transaction is rolled back and no partial data is persisted.
+
+The endpoint performs the following steps atomically:
+
+1. Checks whether `email` already exists in `public.usuarios`.
+2. Inserts a new row into `public.empresas` with `moneda = 'USD'`, `pais = 'El Salvador'`, and `estado = 'ACTIVO'`.
+3. Inserts a new row into `public.usuarios` with `rol = 'admin'`, `estado = 'ACTIVO'`, and `nombre = 'Admin {nombre_legal}'`.
+4. Commits and returns the new `empresa_id`.
+
+### Request body
+
+<ParamField body="nombre_legal" type="string" required>
+  The legal name of the company to register. Used as the empresa's `nombre_legal` and appended to `"Admin "` to form the admin user's display name (e.g., `"Admin Acme S.A."`).
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  The email address for the admin user account. Must be unique across all rows in `public.usuarios`; the endpoint returns a 400 error if the address is already registered.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The plain-text password for the admin user account. Stored directly — see the login warning above about hashing.
+</ParamField>
+
+### Response fields
+
+<ResponseField name="ok" type="boolean">
+  Always `true` on a successful registration.
+</ResponseField>
+
+<ResponseField name="empresa_id" type="number">
+  The newly created company's primary key (`public.empresas.id_empresa`). Persist this value in the client session.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  The email address of the newly created admin user, echoed from the request body.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  The generated display name for the admin user: `"Admin {nombre_legal}"`.
+</ResponseField>
+
+### Example request
+
+```bash
+curl -X POST https://your-domain.com/api/registro \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre_legal": "Acme S.A. de C.V.",
+    "email": "admin@acme.com",
+    "password": "s3cur3P@ss"
+  }'
+```
+
+### Example responses
+
+**200 OK — company and user created successfully**
+
+```json
+{
+  "ok": true,
+  "empresa_id": 12,
+  "email": "admin@acme.com",
+  "nombre": "Admin Acme S.A. de C.V."
+}
+```
+
+**400 Bad Request — missing required fields**
+
+```json
+{
+  "error": "Faltan campos obligatorios"
+}
+```
+
+**400 Bad Request — email already registered**
+
+```json
+{
+  "error": "El correo ya está registrado."
+}
+```
+
+**500 Internal Server Error — transaction rolled back**
+
+```json
+{
+  "error": "Error interno al registrar la empresa"
+}
+```
+
+---
+
+## GET /api/health
+
+A lightweight liveness probe that verifies the API server can reach the Supabase PostgreSQL database. No authentication is required. Intended for uptime monitors, load-balancer health checks, and CI/CD deployment pipelines.
+
+The check executes `SELECT 1` against the connection pool. A successful result confirms both the Node.js process and the Supabase database connection are operational.
+
+### Example request
+
+```bash
+curl https://your-domain.com/api/health
+```
+
+### Example responses
+
+**200 OK — service is healthy**
+
+```json
+{
+  "ok": true,
+  "database": "supabase-postgresql"
+}
+```
+
+**503 Service Unavailable — database unreachable**
+
+```json
+{
+  "ok": false,
+  "error": "Error de conexión"
+}
+```

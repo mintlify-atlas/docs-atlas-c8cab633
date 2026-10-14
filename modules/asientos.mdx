@@ -1,0 +1,182 @@
+---
+title: "Recording Journal Entries (Asientos Contables)"
+sidebarTitle: "Asientos"
+description: "Post double-entry journal entries (asientos contables) to an active libro diario using the ContaFácil accounting API."
+---
+
+## Double-Entry Bookkeeping in ContaFácil
+
+ContaFácil enforces **partida doble** (double-entry bookkeeping): every asiento must have at least two lines where the sum of all **debe** (debit) amounts equals the sum of all **haber** (credit) amounts. The balance constraint is enforced by the PostgreSQL stored function `public.guardar_asiento_completo()` — if the totals don't match, the function raises a `P0001` exception and the entire transaction is rolled back.
+
+Each asiento is:
+- Assigned to one **libro diario** — which must be `ACTIVO` and must belong to the specified `idEmpresa`.
+- Composed of one or more **detalles**, each referencing a valid subcuenta code from the chart of accounts.
+- Stored atomically: either all detail lines are saved or none are.
+
+<Tip>
+  Call `GET /api/cuentas` to browse the full chart of accounts (subcuentas) and look up valid `codigo` values before posting an asiento.
+</Tip>
+
+---
+
+## API Reference
+
+### Get Chart of Accounts
+
+**`GET /api/cuentas`**
+
+Returns all subcuentas available for use in asiento detail lines. No query parameters required.
+
+```bash
+curl "https://your-app.com/api/cuentas"
+```
+
+**Response**
+
+<ResponseField name="[]" type="array">
+  Array of account objects.
+  <Expandable title="Account object fields">
+    <ResponseField name="CodigoSubcuenta" type="string">The subcuenta code to use in asiento `detalles`.</ResponseField>
+    <ResponseField name="NombreSubcuenta" type="string">Human-readable subcuenta name.</ResponseField>
+    <ResponseField name="Categoria" type="string">Name of the parent cuenta principal.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json
+[
+  {
+    "CodigoSubcuenta": "1101",
+    "NombreSubcuenta": "Caja General",
+    "Categoria": "ACTIVO CORRIENTE"
+  },
+  {
+    "CodigoSubcuenta": "2101",
+    "NombreSubcuenta": "Cuentas por Pagar",
+    "Categoria": "PASIVO CORRIENTE"
+  }
+]
+```
+
+---
+
+### Create an Asiento Contable
+
+**`POST /api/asientos`**
+
+<Warning>
+  **Partida doble is mandatory.** The sum of all `debe` values across all `detalles` must equal the sum of all `haber` values. If they don't balance, the PostgreSQL stored function raises `ERRCODE P0001` and the API returns `400 Bad Request` with the database error message. The transaction is fully rolled back — no partial entries are saved.
+</Warning>
+
+#### Request Body
+
+<ParamField body="idEmpresa" type="integer" required>
+  ID of the empresa. Must be a positive integer. Defaults to `1` if omitted.
+</ParamField>
+
+<ParamField body="idLibro" type="integer" required>
+  ID of the target libro diario. The libro must be `ACTIVO` and must belong to `idEmpresa`.
+</ParamField>
+
+<ParamField body="fecha" type="string" required>
+  Date of the journal entry in `YYYY-MM-DD` format (e.g. `"2024-03-15"`).
+</ParamField>
+
+<ParamField body="descripcion" type="string" required>
+  A short description of the transaction (e.g. `"Pago de servicios públicos"`).
+</ParamField>
+
+<ParamField body="detalles" type="array" required>
+  Array of detail lines. Must contain at least one element. Each element must have:
+
+  <Expandable title="Detalle object fields">
+    <ParamField body="codigo" type="string" required>
+      Subcuenta code (string). Must match a valid `CodigoSubcuenta` from `GET /api/cuentas`.
+    </ParamField>
+    <ParamField body="debe" type="number" required>
+      Debit amount. Must be `>= 0`. Exactly one of `debe` or `haber` must be greater than zero — both cannot be positive at the same time, and both cannot be zero.
+    </ParamField>
+    <ParamField body="haber" type="number" required>
+      Credit amount. Must be `>= 0`. Exactly one of `debe` or `haber` must be greater than zero — both cannot be positive at the same time, and both cannot be zero.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### Server-Side Validations
+
+The controller validates each detail line before calling the database:
+
+| Rule | Error returned |
+|---|---|
+| `idEmpresa`, `idLibro`, `fecha`, `detalles` present | `400 Bad Request` |
+| `fecha` matches `YYYY-MM-DD` | `400 Bad Request` |
+| `codigo` is a non-empty string | `400 Bad Request` |
+| `debe` and `haber` are numbers `>= 0` | `400 Bad Request` |
+| Only one of `debe`/`haber` is `> 0` | `400 Bad Request` |
+| Libro is `ACTIVO` for `idEmpresa` | `404 Not Found` |
+| Totals balance (`sum(debe) == sum(haber)`) | `400 Bad Request` (P0001 from PostgreSQL) |
+
+#### Example — Balanced Two-Line Asiento
+
+The following example records the payment of a utility bill: cash (caja) decreases (credit) and the expense account increases (debit).
+
+```bash
+curl -X POST "https://your-app.com/api/asientos" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idEmpresa": 1,
+    "idLibro": 1,
+    "fecha": "2024-03-15",
+    "descripcion": "Pago de servicios públicos - Marzo 2024",
+    "detalles": [
+      {
+        "codigo": "5101",
+        "debe": 150.00,
+        "haber": 0
+      },
+      {
+        "codigo": "1101",
+        "debe": 0,
+        "haber": 150.00
+      }
+    ]
+  }'
+```
+
+**Response `200 OK`**
+
+<ResponseField name="mensaje" type="string">
+  Confirmation message that the asiento was saved successfully.
+</ResponseField>
+
+```json
+{ "mensaje": "Asiento procesado y guardado con éxito" }
+```
+
+**Error Response `400 Bad Request`** — unbalanced entry or validation failure:
+
+```json
+{ "error": "Los montos debe y haber no cuadran (partida doble)" }
+```
+
+**Error Response `404 Not Found`** — libro is inactive or doesn't belong to the empresa:
+
+```json
+{ "error": "El libro no existe o está inactivo" }
+```
+
+---
+
+## How Entries Are Stored
+
+Under the hood, `POST /api/asientos` calls the PostgreSQL stored function:
+
+```sql
+SELECT public.guardar_asiento_completo(
+  $1,        -- id_libro (integer)
+  $2::date,  -- fecha (date)
+  $3,        -- descripcion (text)
+  $4::jsonb  -- detalles (JSON array of {codigo, debe, haber})
+) AS id_asiento;
+```
+
+The function handles inserting the header row into `asientos` and all detail lines into `detalles_asiento` within a single transaction. It returns the new `id_asiento`.

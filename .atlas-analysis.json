@@ -1,0 +1,95 @@
+{
+  "projectType": "saas",
+  "projectName": "ContaFácil",
+  "projectDescription": "A full-stack accounting web application built with Node.js/Express and Supabase PostgreSQL that automates the key stages of the accounting cycle, from journal entries to financial statements.",
+  "theme": "almond",
+  "primaryColor": "#2E7D32",
+  "lightColor": "#4CAF50",
+  "darkColor": "#1B5E20",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guía",
+        "groups": [
+          {
+            "group": "Introducción",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Configuración",
+            "pages": ["setup/installation", "setup/database", "setup/company"]
+          },
+          {
+            "group": "Módulos Contables",
+            "pages": [
+              "modules/libros-diarios",
+              "modules/asientos",
+              "modules/mayorizacion",
+              "modules/balance-comprobacion",
+              "modules/estado-resultados",
+              "modules/balance-general",
+              "modules/kardex"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Autenticación",
+            "pages": ["api/auth"]
+          },
+          {
+            "group": "Empresa & Libros",
+            "pages": ["api/empresa", "api/libros"]
+          },
+          {
+            "group": "Contabilidad",
+            "pages": ["api/asientos", "api/historial", "api/mayorizacion", "api/reportes"]
+          },
+          {
+            "group": "Kardex",
+            "pages": ["api/kardex"]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-company accounting with isolated books per empresa",
+    "Dynamic journal books (libros diarios) with ACTIVO/INACTIVO states",
+    "Double-entry journal entry recording via stored procedures",
+    "Ledger posting (mayorización) with date-range filtering",
+    "Trial balance (balance de comprobación) with auto-balancing validation",
+    "Income statement (estado de resultados) for revenue/expense accounts",
+    "Balance sheet (balance general) for assets, liabilities, and equity",
+    "Inventory control via Kardex with FIFO cost averaging",
+    "Kardex movement types: INVENTARIO_INICIAL, COMPRA, VENTA, DEV_COMPRA, DEV_VENTA",
+    "IVA (13%) handling for Kardex pricing (included or excluded)",
+    "User authentication tied to empresa with admin role",
+    "Supabase PostgreSQL backend with connection pooling"
+  ],
+  "publicApiSurface": [
+    "POST /api/login",
+    "POST /api/registro",
+    "GET /api/health",
+    "GET /api/empresa",
+    "PUT /api/empresa/:idEmpresa",
+    "GET /api/libros",
+    "POST /api/libros",
+    "PATCH /api/libros/:idLibro",
+    "DELETE /api/libros/:idLibro",
+    "GET /api/cuentas",
+    "POST /api/asientos",
+    "GET /api/historial",
+    "GET /api/mayorizacion",
+    "GET /api/balance-comprobacion",
+    "GET /api/estado-resultados",
+    "GET /api/balance-cuentas",
+    "GET /api/kardex-articulos/:id_empresa",
+    "POST /api/kardex",
+    "GET /api/kardex/:filtro/:id_empresa",
+    "DELETE /api/kardex/:id_movimiento/:id_empresa"
+  ]
+}

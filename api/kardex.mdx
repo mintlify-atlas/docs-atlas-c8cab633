@@ -1,0 +1,314 @@
+---
+title: "Inventory Kardex API Reference — ContaFácil"
+sidebarTitle: "Kardex API"
+description: "Record, query, and delete inventory movements using ContaFácil's weighted-average Kardex, with built-in IVA handling and per-empresa isolation."
+---
+
+ContaFácil's Kardex module tracks inventory movements using a **weighted-average cost** method. Each movement type — initial inventory, purchases, sales, and their respective returns — automatically recalculates running balances for quantity, unit cost, and total cost. All kardex records are isolated by `id_empresa`, and article codes are normalised to uppercase on write.
+
+---
+
+## POST /api/kardex
+
+Records a new inventory movement. The controller fetches the last movement for the article within the empresa to obtain the current running balance, applies the movement, recalculates the weighted-average cost, and inserts the new row.
+
+### Request Body
+
+<ParamField body="id_empresa" type="integer" required>
+  Empresa identifier. Must be present; missing value returns `401`.
+</ParamField>
+
+<ParamField body="fecha_movimiento" type="string" required>
+  Movement date in `YYYY-MM-DD` format. Must not be earlier than the date on the most recent movement for the same article and empresa; otherwise the request is rejected with `400`.
+</ParamField>
+
+<ParamField body="articulo" type="string" required>
+  Article identifier. Stored as uppercase after trimming whitespace (e.g. `"laptop pro 15"` → `"LAPTOP PRO 15"`). Acts as the grouping key for all kardex movements of this article.
+</ParamField>
+
+<ParamField body="cuenta_contable" type="string" required>
+  Accounting account code or name to associate with this movement. Prepended to `concepto` with ` - ` before storage (e.g. `"1103-01"` + `"Compra de mercadería"` → `"1103-01 - Compra de mercadería"`).
+</ParamField>
+
+<ParamField body="concepto" type="string" required>
+  Free-text description of the movement (e.g. `"Compra de mercadería"`). Combined with `cuenta_contable` as described above.
+</ParamField>
+
+<ParamField body="tipo_movimiento" type="string" required>
+  Type of movement. Must be one of the following values:
+
+  | Value | Effect on stock |
+  |---|---|
+  | `INVENTARIO_INICIAL` | Increases quantity and total cost |
+  | `COMPRA` | Increases quantity and total cost |
+  | `VENTA` | Decreases quantity; cost uses current weighted-average |
+  | `DEV_COMPRA` | Decreases quantity and total cost at the supplied unit price |
+  | `DEV_VENTA` | Increases quantity and total cost at the supplied unit price |
+</ParamField>
+
+<ParamField body="cantidad" type="number" required>
+  Quantity of units involved in the movement (e.g. `10`). For `VENTA` and `DEV_COMPRA`, must not exceed the current `saldo_cantidad` for the article, otherwise the API returns `400`.
+</ParamField>
+
+<ParamField body="precio_ingresado" type="number" required>
+  Unit price for this movement. When `condicion_iva` is `'incluido'`, the actual unit cost stored is `precio_ingresado / 1.13` (IVA extracted). Any other value of `condicion_iva` uses `precio_ingresado` directly as the unit cost.
+</ParamField>
+
+<ParamField body="condicion_iva" type="string">
+  IVA treatment for the price. Pass `'incluido'` to have the system extract the 13 % IVA from `precio_ingresado`. Any other value (or omitting this field) treats `precio_ingresado` as an IVA-exclusive price.
+</ParamField>
+
+### Cost Calculation Notes
+
+- **Entries** (`INVENTARIO_INICIAL`, `COMPRA`, `DEV_VENTA`): `costo_unitario = precio_real`, `costo_total = cantidad × precio_real`. Running balance increases.
+- **Exits** (`VENTA`, `DEV_COMPRA`): unit cost is the current weighted average (`saldo_total / saldo_cantidad`) for `VENTA`, or the supplied price for `DEV_COMPRA`. Running balance decreases.
+- **`saldo_costo_unitario`** stored per row is `saldo_total / saldo_cantidad` (zero when quantity reaches zero).
+
+### Success Response — 201
+
+```json
+{
+  "mensaje": "Movimiento registrado correctamente"
+}
+```
+
+### Error Responses
+
+**400 — Date is earlier than last movement**
+```json
+{
+  "error": "La fecha no puede ser menor al último movimiento de este artículo."
+}
+```
+
+**400 — Insufficient stock on VENTA or DEV_COMPRA**
+```json
+{
+  "error": "Stock insuficiente de LAPTOP PRO 15."
+}
+```
+
+**401 — Missing empresa ID**
+```json
+{
+  "error": "Falta el ID de la empresa"
+}
+```
+
+### Example — Record a purchase (COMPRA)
+
+```bash
+curl -X POST https://api.contafacil.app/api/kardex \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_empresa": 1,
+    "fecha_movimiento": "2024-07-10",
+    "articulo": "Laptop Pro 15",
+    "cuenta_contable": "1103-01",
+    "concepto": "Compra a proveedor XYZ",
+    "tipo_movimiento": "COMPRA",
+    "cantidad": 5,
+    "precio_ingresado": 565.00,
+    "condicion_iva": "incluido"
+  }'
+```
+
+```json
+{
+  "mensaje": "Movimiento registrado correctamente"
+}
+```
+
+In this example, the stored unit cost will be `565.00 / 1.13 ≈ 500.0000`.
+
+---
+
+## GET /api/kardex/:filtro/:id_empresa
+
+Returns all Kardex movements for an empresa, optionally filtered to a single article, ordered chronologically.
+
+### Path Parameters
+
+<ParamField path="filtro" type="string" required>
+  Article code to filter by (e.g. `"LAPTOP PRO 15"`), or the literal string `"GLOBAL"` to return movements for **all** articles belonging to the empresa. The value is normalised to uppercase before querying.
+</ParamField>
+
+<ParamField path="id_empresa" type="integer" required>
+  Empresa identifier. Must be present; missing value returns `401`.
+</ParamField>
+
+### Response
+
+Returns a JSON array ordered by `fecha ASC, id_movimiento ASC`.
+
+<ResponseField name="id_movimiento" type="integer">
+  Auto-generated primary key of the movement record.
+</ResponseField>
+
+<ResponseField name="codigo_articulo" type="string">
+  Normalised (uppercase) article code.
+</ResponseField>
+
+<ResponseField name="fecha" type="string">
+  Movement date in ISO 8601 format.
+</ResponseField>
+
+<ResponseField name="concepto" type="string">
+  Combined concept string (`cuenta_contable - concepto` as submitted).
+</ResponseField>
+
+<ResponseField name="tipo_movimiento" type="string">
+  One of `INVENTARIO_INICIAL`, `COMPRA`, `VENTA`, `DEV_COMPRA`, `DEV_VENTA`.
+</ResponseField>
+
+<ResponseField name="cantidad" type="number">
+  Quantity of units in this movement.
+</ResponseField>
+
+<ResponseField name="costo_unitario" type="number">
+  Unit cost of this movement (IVA-extracted if applicable), rounded to 4 decimal places.
+</ResponseField>
+
+<ResponseField name="costo_total" type="number">
+  Total cost of this movement (`cantidad × costo_unitario`), rounded to 2 decimal places.
+</ResponseField>
+
+<ResponseField name="saldo_cantidad" type="number">
+  Running stock quantity after this movement.
+</ResponseField>
+
+<ResponseField name="saldo_costo_unitario" type="number">
+  Running weighted-average unit cost after this movement, rounded to 4 decimal places. `0` when `saldo_cantidad` is zero.
+</ResponseField>
+
+<ResponseField name="saldo_total" type="number">
+  Running total inventory value after this movement, rounded to 2 decimal places.
+</ResponseField>
+
+<ResponseField name="id_empresa" type="integer">
+  Empresa this movement belongs to.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  Timestamp of when the record was inserted, in ISO 8601 format.
+</ResponseField>
+
+### Examples
+
+**Single article**
+
+```bash
+curl "https://api.contafacil.app/api/kardex/LAPTOP%20PRO%2015/1"
+```
+
+**All articles (GLOBAL)**
+
+```bash
+curl "https://api.contafacil.app/api/kardex/GLOBAL/1"
+```
+
+```json
+[
+  {
+    "id_movimiento": 1,
+    "codigo_articulo": "LAPTOP PRO 15",
+    "fecha": "2024-07-10",
+    "concepto": "1103-01 - Compra a proveedor XYZ",
+    "tipo_movimiento": "COMPRA",
+    "cantidad": 5,
+    "costo_unitario": 500.0000,
+    "costo_total": 2500.00,
+    "saldo_cantidad": 5,
+    "saldo_costo_unitario": 500.0000,
+    "saldo_total": 2500.00,
+    "id_empresa": 1,
+    "created_at": "2024-07-10T14:23:11.000Z"
+  }
+]
+```
+
+---
+
+## GET /api/kardex-articulos/:id_empresa
+
+Returns the list of unique article codes that have at least one Kardex movement for the given empresa. Useful for populating article selection dropdowns in the frontend.
+
+### Path Parameters
+
+<ParamField path="id_empresa" type="integer" required>
+  Empresa identifier. Must be present; missing value returns `401`.
+</ParamField>
+
+### Response
+
+Returns a JSON array of strings, each representing a unique `codigo_articulo`, ordered alphabetically ascending.
+
+### Example
+
+```bash
+curl "https://api.contafacil.app/api/kardex-articulos/1"
+```
+
+```json
+[
+  "LAPTOP PRO 15",
+  "MONITOR 27 PULGADAS",
+  "TECLADO INALAMBRICO"
+]
+```
+
+---
+
+## DELETE /api/kardex/:id_movimiento/:id_empresa
+
+Permanently deletes a single Kardex movement record identified by `id_movimiento` and `id_empresa`.
+
+<Warning>
+  This is a **hard delete** — the row is removed directly from the `kardex` table with no compensating reversal entry and no soft-delete flag. After deletion, running balances for subsequent movements of the same article will be inconsistent. Use with caution and prefer re-posting the article's full movement history when corrections are needed.
+</Warning>
+
+### Path Parameters
+
+<ParamField path="id_movimiento" type="integer" required>
+  Primary key of the Kardex record to delete.
+</ParamField>
+
+<ParamField path="id_empresa" type="integer" required>
+  Empresa identifier. Scopes the delete to records belonging to this empresa, preventing cross-empresa deletions.
+</ParamField>
+
+### Success Response — 200
+
+```json
+{
+  "mensaje": "Movimiento anulado"
+}
+```
+
+### Error Responses
+
+**401 — Missing empresa ID**
+```json
+{
+  "error": "Falta el ID de la empresa"
+}
+```
+
+**500 — Internal server error**
+```json
+{
+  "error": "Error al anular"
+}
+```
+
+### Example
+
+```bash
+curl -X DELETE "https://api.contafacil.app/api/kardex/1/1"
+```
+
+```json
+{
+  "mensaje": "Movimiento anulado"
+}
+```

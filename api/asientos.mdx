@@ -1,0 +1,160 @@
+---
+title: "Journal Entries API — POST /api/asientos"
+sidebarTitle: "Asientos"
+description: "Create double-entry journal entries and retrieve your chart of accounts in ContaFácil using the Supabase-backed accounting engine."
+---
+
+ContaFácil's journal entry endpoints let you fetch the complete chart of accounts and post balanced double-entry journal lines to an active *libro diario*. Every submission flows through the `guardar_asiento_completo` PostgreSQL stored procedure, which atomically validates the debit/credit balance and persists all detail lines in a single transaction.
+
+---
+
+## GET /api/cuentas
+
+Retrieves the full chart of accounts, joining `subcuentas` with `cuentas_principales`. No authentication parameters are required; the catalogue is shared across all empresas.
+
+### Response
+
+Returns a JSON array. Each element represents one subcuenta.
+
+<ResponseField name="CodigoSubcuenta" type="string">
+  Unique alphanumeric code that identifies the subcuenta (e.g. `"1101-01"`). Used as the `codigo` field in journal entry detail lines.
+</ResponseField>
+
+<ResponseField name="NombreSubcuenta" type="string">
+  Human-readable name of the subcuenta (e.g. `"Caja General"`).
+</ResponseField>
+
+<ResponseField name="Categoria" type="string">
+  Name of the parent cuenta principal this subcuenta belongs to (e.g. `"ACTIVO CORRIENTE"`).
+</ResponseField>
+
+### Example
+
+```bash
+curl https://api.contafacil.app/api/cuentas
+```
+
+```json
+[
+  {
+    "CodigoSubcuenta": "1101-01",
+    "NombreSubcuenta": "Caja General",
+    "Categoria": "ACTIVO CORRIENTE"
+  },
+  {
+    "CodigoSubcuenta": "4101-01",
+    "NombreSubcuenta": "Ventas de Mercadería",
+    "Categoria": "INGRESOS"
+  }
+]
+```
+
+---
+
+## POST /api/asientos
+
+Posts a new journal entry to the specified *libro diario*. The controller verifies that the libro is `ACTIVO` for the given empresa, validates every detail line, then delegates to the `guardar_asiento_completo` stored procedure which enforces double-entry balance and returns the new `id_asiento`.
+
+### Request Body
+
+<ParamField body="idEmpresa" type="integer" required>
+  Positive integer identifying the empresa. Must match an existing, active empresa record.
+</ParamField>
+
+<ParamField body="idLibro" type="integer" required>
+  Positive integer identifying the target *libro diario*. The libro must exist and have `estado = 'ACTIVO'` for the given `idEmpresa`; otherwise the API returns `404`.
+</ParamField>
+
+<ParamField body="fecha" type="string" required>
+  Entry date in `YYYY-MM-DD` format (e.g. `"2024-07-15"`). The value is cast to a PostgreSQL `DATE` by the stored procedure.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Optional free-text description for the journal entry (e.g. `"Venta al contado factura #1042"`).
+</ParamField>
+
+<ParamField body="detalles" type="array" required>
+  Array of detail lines. Must contain at least one element. Each element represents one side of a ledger movement.
+
+  <ParamField body="detalles[].codigo" type="string" required>
+    Subcuenta code from the chart of accounts (matches `CodigoSubcuenta` from `GET /api/cuentas`).
+  </ParamField>
+
+  <ParamField body="detalles[].debe" type="number" required>
+    Debit amount. Must be `>= 0`. Use `0` when the line is a credit. Must not be negative.
+  </ParamField>
+
+  <ParamField body="detalles[].haber" type="number" required>
+    Credit amount. Must be `>= 0`. Use `0` when the line is a debit. Must not be negative.
+  </ParamField>
+</ParamField>
+
+### Validation Rules
+
+| Rule | HTTP status |
+|---|---|
+| `idEmpresa` or `idLibro` is missing, non-integer, or `<= 0` | `400` |
+| `fecha` does not match `/^\d{4}-\d{2}-\d{2}$/` | `400` |
+| Any detail line has `debe < 0` or `haber < 0` | `400` |
+| Any detail line has both `debe = 0` and `haber = 0` | `400` |
+| Any detail line has both `debe > 0` and `haber > 0` | `400` |
+| Libro not found or `estado ≠ 'ACTIVO'` for the empresa | `404` |
+| Total debits ≠ total credits (raised as `P0001` by stored procedure) | `400` |
+
+<Warning>
+  **Partida doble is strictly enforced.** The `guardar_asiento_completo` PostgreSQL function raises a `P0001` exception if `SUM(debe) ≠ SUM(haber)` across all detail lines. The API surfaces this as an HTTP `400` with the exact PostgreSQL error message in the `error` field.
+</Warning>
+
+### Success Response — 200
+
+```json
+{
+  "mensaje": "Asiento procesado y guardado con éxito"
+}
+```
+
+### Error Responses
+
+**400 — Validation failure or unbalanced entry**
+```json
+{
+  "error": "Estructura de detalles inválida o montos negativos"
+}
+```
+
+**400 — Stored procedure P0001 (unbalanced totals)**
+```json
+{
+  "error": "Los totales de debe y haber no coinciden"
+}
+```
+
+**404 — Libro not found or inactive**
+```json
+{
+  "error": "El libro no existe o está inactivo"
+}
+```
+
+### Example — Balanced two-line entry (debit cash, credit revenue)
+
+```bash
+curl -X POST https://api.contafacil.app/api/asientos \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idEmpresa": 1,
+    "idLibro": 3,
+    "fecha": "2024-07-15",
+    "descripcion": "Venta al contado factura #1042",
+    "detalles": [
+      { "codigo": "1101-01", "debe": 250.00, "haber": 0 },
+      { "codigo": "4101-01", "debe": 0, "haber": 250.00 }
+    ]
+  }'
+```
+
+```json
+{
+  "mensaje": "Asiento procesado y guardado con éxito"
+}
+```

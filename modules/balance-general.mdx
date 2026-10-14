@@ -1,0 +1,149 @@
+---
+title: "Balance Sheet (Balance General) in ContaFácil"
+sidebarTitle: "Balance General"
+description: "Retrieve the balance sheet (balance general) summarizing assets, liabilities, and equity for a libro diario and date range."
+---
+
+## What is the Balance General?
+
+The **balance general** (balance sheet) is a financial statement that presents the empresa's financial position at a point in time — or summarized over a period. It is structured around the fundamental accounting equation:
+
+```
+Assets (Activos) = Liabilities (Pasivos) + Equity (Patrimonio)
+```
+
+In ContaFácil, the balance general is computed from the `vw_historial_asientos` view, filtering to the three balance-sheet account groups based on subcuenta code prefixes:
+
+<Note>
+  In the ContaFácil chart of accounts:
+  - **`1xxxxxxx`** — **Activos** (Assets): resources owned or controlled by the empresa.
+  - **`2xxxxxxx`** — **Pasivos** (Liabilities): obligations owed to third parties.
+  - **`3xxxxxxx`** — **Patrimonio** (Equity): the residual interest of the owners.
+</Note>
+
+Results are grouped by the first 4 characters of the subcuenta code (`CodigoMayor`) and the cuenta principal name.
+
+---
+
+## API Reference
+
+### Get Balance General
+
+**`GET /api/balance-cuentas`**
+
+#### Query Parameters
+
+<ParamField query="idLibro" type="integer" required>
+  ID of the libro diario to report on.
+</ParamField>
+
+<ParamField query="fechaInicio" type="string" required>
+  Start date of the reporting period in `YYYY-MM-DD` format (inclusive).
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  End date of the reporting period in `YYYY-MM-DD` format (inclusive).
+</ParamField>
+
+#### Example Request
+
+```bash
+curl "https://your-app.com/api/balance-cuentas?idLibro=1&fechaInicio=2024-01-01&fechaFin=2024-12-31"
+```
+
+#### Response
+
+<ResponseField name="[]" type="array">
+  Array of summarized account rows, ordered by `CodigoMayor` ascending. Contains only accounts with codes starting with `1` (activos), `2` (pasivos), or `3` (patrimonio).
+  <Expandable title="Row fields">
+    <ResponseField name="CodigoMayor" type="string">
+      The first 4 characters of the subcuenta code, representing the major account grouping (e.g. `"1101"` for Caja y Bancos).
+    </ResponseField>
+    <ResponseField name="NombreCuenta" type="string">
+      Name of the cuenta principal associated with the subcuenta (e.g. `"ACTIVO CORRIENTE"`, `"PASIVO CORRIENTE"`, `"PATRIMONIO"`).
+    </ResponseField>
+    <ResponseField name="TotalDebe" type="number">
+      Aggregate debit total for this account group within the period.
+    </ResponseField>
+    <ResponseField name="TotalHaber" type="number">
+      Aggregate credit total for this account group within the period.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Sample Response
+
+```json
+[
+  {
+    "CodigoMayor": "1101",
+    "NombreCuenta": "ACTIVO CORRIENTE",
+    "TotalDebe": 15000.00,
+    "TotalHaber": 3500.00
+  },
+  {
+    "CodigoMayor": "1201",
+    "NombreCuenta": "ACTIVO NO CORRIENTE",
+    "TotalDebe": 50000.00,
+    "TotalHaber": 0.00
+  },
+  {
+    "CodigoMayor": "2101",
+    "NombreCuenta": "PASIVO CORRIENTE",
+    "TotalDebe": 0.00,
+    "TotalHaber": 12000.00
+  },
+  {
+    "CodigoMayor": "3101",
+    "NombreCuenta": "PATRIMONIO",
+    "TotalDebe": 0.00,
+    "TotalHaber": 49500.00
+  }
+]
+```
+
+---
+
+## Interpreting the Results
+
+<CardGroup cols={3}>
+  <Card title="Activos (1xxxx)" icon="building">
+    Asset accounts are normally **debit-balance**. A positive `TotalDebe` represents resources held by the empresa. Net asset value per group = `TotalDebe - TotalHaber`.
+  </Card>
+  <Card title="Pasivos (2xxxx)" icon="file-invoice-dollar">
+    Liability accounts are normally **credit-balance**. A positive `TotalHaber` represents obligations. Net liability = `TotalHaber - TotalDebe`.
+  </Card>
+  <Card title="Patrimonio (3xxxx)" icon="scale-balanced">
+    Equity accounts are normally **credit-balance**. A positive `TotalHaber` represents the owners' stake. Net equity = `TotalHaber - TotalDebe`.
+  </Card>
+</CardGroup>
+
+To verify the accounting equation holds, the client should confirm:
+
+```
+Sum(Net Activos) ≈ Sum(Net Pasivos) + Sum(Net Patrimonio)
+```
+
+---
+
+## Underlying Query
+
+The balance general is built with:
+
+```sql
+SELECT
+  SUBSTRING(h.codigo_subcuenta, 1, 4) AS "CodigoMayor",
+  h.cuenta_principal                  AS "NombreCuenta",
+  SUM(COALESCE(h.debe, 0))            AS "TotalDebe",
+  SUM(COALESCE(h.haber, 0))           AS "TotalHaber"
+FROM public.vw_historial_asientos h
+WHERE (
+    h.codigo_subcuenta LIKE '1%'
+ OR h.codigo_subcuenta LIKE '2%'
+ OR h.codigo_subcuenta LIKE '3%'
+  )
+  AND h.id_libro = $1
+  AND h.fecha BETWEEN $2::date AND $3::date
+GROUP BY SUBSTRING(h.codigo_subcuenta, 1, 4), h.cuenta_principal
+ORDER BY "CodigoMayor";
+```

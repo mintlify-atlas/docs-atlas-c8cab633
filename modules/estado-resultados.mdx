@@ -1,0 +1,141 @@
+---
+title: "Income Statement (Estado de Resultados) in ContaFácil"
+sidebarTitle: "Estado Resultados"
+description: "Retrieve the income statement (estado de resultados) summarizing revenues and expenses for a libro diario and date range."
+---
+
+## What is the Estado de Resultados?
+
+The **estado de resultados** (income statement, also called the *profit & loss statement*) summarizes all revenue and expense activity for a given period. It answers: *"Did the empresa earn a profit or incur a loss between two dates?"*
+
+In ContaFácil, the income statement is computed directly from the `vw_historial_asientos` view, filtering to subcuentas whose codes start with:
+
+<Note>
+  In the ContaFácil chart of accounts, **account codes starting with `4`** represent **ingresos** (revenue accounts) and **account codes starting with `5`** represent **egresos/gastos** (expense accounts). The income statement includes only these two groups.
+</Note>
+
+| Code prefix | Account type |
+|---|---|
+| `4xxxxxxx` | Ingresos (Revenue) |
+| `5xxxxxxx` | Egresos / Gastos (Expenses) |
+
+Results are grouped by the first 4 characters of the subcuenta code (`CodigoMayor`) and the cuenta principal name, giving a summarized view by major account heading.
+
+---
+
+## API Reference
+
+### Get Estado de Resultados
+
+**`GET /api/estado-resultados`**
+
+#### Query Parameters
+
+<ParamField query="idLibro" type="integer" required>
+  ID of the libro diario to report on.
+</ParamField>
+
+<ParamField query="fechaInicio" type="string" required>
+  Start date of the reporting period in `YYYY-MM-DD` format (inclusive).
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  End date of the reporting period in `YYYY-MM-DD` format (inclusive).
+</ParamField>
+
+#### Example Request
+
+```bash
+curl "https://your-app.com/api/estado-resultados?idLibro=1&fechaInicio=2024-01-01&fechaFin=2024-12-31"
+```
+
+#### Response
+
+<ResponseField name="[]" type="array">
+  Array of summarized account rows, ordered by `CodigoMayor` ascending. Contains only accounts with codes starting with `4` (ingresos) or `5` (egresos).
+  <Expandable title="Row fields">
+    <ResponseField name="CodigoMayor" type="string">
+      The first 4 characters of the subcuenta code, representing the major account grouping (e.g. `"4101"` for Ingresos por Ventas).
+    </ResponseField>
+    <ResponseField name="NombreCuenta" type="string">
+      Name of the cuenta principal associated with the subcuenta (e.g. `"INGRESOS"`, `"GASTOS DE OPERACIÓN"`).
+    </ResponseField>
+    <ResponseField name="TotalDebe" type="number">
+      Aggregate debit total for this account group within the period.
+    </ResponseField>
+    <ResponseField name="TotalHaber" type="number">
+      Aggregate credit total for this account group within the period.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Sample Response
+
+```json
+[
+  {
+    "CodigoMayor": "4101",
+    "NombreCuenta": "INGRESOS",
+    "TotalDebe": 0.00,
+    "TotalHaber": 25000.00
+  },
+  {
+    "CodigoMayor": "4201",
+    "NombreCuenta": "OTROS INGRESOS",
+    "TotalDebe": 0.00,
+    "TotalHaber": 1200.00
+  },
+  {
+    "CodigoMayor": "5101",
+    "NombreCuenta": "GASTOS DE OPERACIÓN",
+    "TotalDebe": 8500.00,
+    "TotalHaber": 0.00
+  },
+  {
+    "CodigoMayor": "5201",
+    "NombreCuenta": "GASTOS DE ADMINISTRACIÓN",
+    "TotalDebe": 3200.00,
+    "TotalHaber": 0.00
+  }
+]
+```
+
+---
+
+## Interpreting the Results
+
+<CardGroup cols={2}>
+  <Card title="Revenue Accounts (4xxxx)" icon="arrow-trend-up">
+    Revenue accounts are normally **credit-balance** accounts. A positive `TotalHaber` indicates recognized income. To compute total revenue, sum `TotalHaber` across all rows where `CodigoMayor` starts with `4`.
+  </Card>
+  <Card title="Expense Accounts (5xxxx)" icon="arrow-trend-down">
+    Expense accounts are normally **debit-balance** accounts. A positive `TotalDebe` indicates costs incurred. To compute total expenses, sum `TotalDebe` across all rows where `CodigoMayor` starts with `5`.
+  </Card>
+</CardGroup>
+
+**Net Income (Utilidad/Pérdida)** can be derived client-side:
+
+```
+Net Income = Total Revenue (sum of TotalHaber where CodigoMayor LIKE '4%')
+           - Total Expenses (sum of TotalDebe where CodigoMayor LIKE '5%')
+```
+
+---
+
+## Underlying Query
+
+The income statement is built with:
+
+```sql
+SELECT
+  SUBSTRING(h.codigo_subcuenta, 1, 4) AS "CodigoMayor",
+  h.cuenta_principal                  AS "NombreCuenta",
+  SUM(COALESCE(h.debe, 0))            AS "TotalDebe",
+  SUM(COALESCE(h.haber, 0))           AS "TotalHaber"
+FROM public.vw_historial_asientos h
+WHERE (h.codigo_subcuenta LIKE '4%' OR h.codigo_subcuenta LIKE '5%')
+  AND h.id_libro = $1
+  AND h.fecha BETWEEN $2::date AND $3::date
+GROUP BY SUBSTRING(h.codigo_subcuenta, 1, 4), h.cuenta_principal
+ORDER BY "CodigoMayor";
+```

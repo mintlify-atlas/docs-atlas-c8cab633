@@ -1,0 +1,131 @@
+---
+title: "Ledger Posting API — GET /api/mayorizacion"
+sidebarTitle: "Mayorización"
+description: "Retrieve ledger-posted movements grouped by cuenta principal for a date range, optionally filtered to a single libro diario in ContaFácil."
+---
+
+The mayorización endpoint aggregates every journal entry line that falls within a given date range into a classic ledger-posting view. Each row pairs a movement with its cuenta principal, subcuenta name, and raw debit/credit amounts — giving accountants the raw data needed to build T-accounts or verify postings period by period.
+
+---
+
+## GET /api/mayorizacion
+
+Fetches detail lines from `vw_historial_asientos`, joined with `libros_diarios` and `subcuentas`, ordered by `codigo_cuenta → fecha → id_asiento`. Only entries whose `fecha` falls between `fechaInicio` and `fechaFin` (inclusive) are returned.
+
+### Query Parameters
+
+<ParamField query="idEmpresa" type="integer" required>
+  Positive integer identifying the empresa. Used to filter `libros_diarios` so only books that belong to this empresa are considered.
+</ParamField>
+
+<ParamField query="idLibro" type="integer">
+  Optional. Restricts results to a single *libro diario*. Must be a positive integer when supplied. If omitted, movements from all books belonging to the empresa within the date range are returned.
+</ParamField>
+
+<ParamField query="fechaInicio" type="string" required>
+  Start of the date range in `YYYY-MM-DD` format (e.g. `"2024-01-01"`). Must not be later than `fechaFin`.
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  End of the date range in `YYYY-MM-DD` format (e.g. `"2024-06-30"`). Must not be earlier than `fechaInicio`.
+</ParamField>
+
+### Validation Rules
+
+| Rule | HTTP status |
+|---|---|
+| `idEmpresa` missing, non-integer, or `<= 0` | `400` |
+| `idLibro` present but non-integer or `<= 0` | `400` |
+| `fechaInicio` or `fechaFin` missing | `400` |
+| `fechaInicio > fechaFin` | `400` |
+| Either date does not match `YYYY-MM-DD` | `400` |
+
+### Response
+
+Returns a JSON array ordered by `codigo_cuenta`, `fecha`, then `id_asiento`.
+
+<ResponseField name="codigo_cuenta" type="string">
+  Code of the parent cuenta principal that this subcuenta belongs to (e.g. `"11"`).
+</ResponseField>
+
+<ResponseField name="cuenta" type="string">
+  Name of the cuenta principal (i.e. `cuenta_principal` from the view, e.g. `"ACTIVO CORRIENTE"`).
+</ResponseField>
+
+<ResponseField name="fecha" type="string">
+  Entry date in ISO 8601 format.
+</ResponseField>
+
+<ResponseField name="descripcion" type="string">
+  Free-text description of the journal entry. May be `null`.
+</ResponseField>
+
+<ResponseField name="id_asiento" type="integer">
+  ID of the journal entry this line belongs to.
+</ResponseField>
+
+<ResponseField name="subcuenta" type="string">
+  Human-readable name of the subcuenta (from `subcuentas.nombre_subcuenta`, e.g. `"Caja General"`).
+</ResponseField>
+
+<ResponseField name="debe" type="number">
+  Debit amount. Defaults to `0` via `COALESCE` when no debit was recorded.
+</ResponseField>
+
+<ResponseField name="haber" type="number">
+  Credit amount. Defaults to `0` via `COALESCE` when no credit was recorded.
+</ResponseField>
+
+### Error Responses
+
+**400 — Invalid parameters or date range**
+```json
+{
+  "error": "Empresa, fechas y rango válido son obligatorios"
+}
+```
+
+**400 — Bad date format**
+```json
+{
+  "error": "El formato de las fechas debe ser YYYY-MM-DD"
+}
+```
+
+**500 — Internal server error**
+```json
+{
+  "error": "Error al obtener la mayorización"
+}
+```
+
+### Example
+
+```bash
+curl "https://api.contafacil.app/api/mayorizacion?idEmpresa=1&idLibro=3&fechaInicio=2024-01-01&fechaFin=2024-06-30"
+```
+
+```json
+[
+  {
+    "codigo_cuenta": "11",
+    "cuenta": "ACTIVO CORRIENTE",
+    "fecha": "2024-01-10T00:00:00.000Z",
+    "descripcion": "Apertura de caja",
+    "id_asiento": 1,
+    "subcuenta": "Caja General",
+    "debe": 1000.00,
+    "haber": 0.00
+  },
+  {
+    "codigo_cuenta": "41",
+    "cuenta": "INGRESOS",
+    "fecha": "2024-03-22T00:00:00.000Z",
+    "descripcion": "Venta factura #0088",
+    "id_asiento": 12,
+    "subcuenta": "Ventas de Mercadería",
+    "debe": 0.00,
+    "haber": 500.00
+  }
+]
+```
