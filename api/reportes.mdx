@@ -1,7 +1,7 @@
 ---
-title: "Financial Reports API — Estado de Resultados & Balance General"
+title: "Financial Reports API — Resultados & Balance | ContaFácil"
 sidebarTitle: "Reportes"
-description: "Generate income statements, balance sheet summaries, and a trial balance for any date range directly from ContaFácil's ledger view."
+description: "Generate income statements, balance-of-accounts summaries, and a full trial balance for any date range directly from ContaFácil's ledger view."
 ---
 
 This page documents the three financial-reporting endpoints in ContaFácil. **Estado de Resultados** (`GET /api/estado-resultados`) summarises income and expense accounts; **Balance de Cuentas** (`GET /api/balance-cuentas`) summarises asset, liability, and equity accounts; and **Balance de Comprobación** (`GET /api/balance-comprobacion`) produces a full trial balance via a dedicated PostgreSQL function, including a final TOTALES row that confirms whether the books balance.
@@ -164,8 +164,8 @@ Produces a full trial balance by calling the `balance_comprobacion(p_id_empresa,
 
 ### Query Parameters
 
-<ParamField query="idEmpresa" type="integer" required>
-  Positive integer identifying the empresa. The stored function validates that `idLibro` belongs to this empresa before executing.
+<ParamField query="idEmpresa" type="integer">
+  Positive integer identifying the empresa. Defaults to `1` when omitted. The stored function validates that `idLibro` belongs to this empresa before executing.
 </ParamField>
 
 <ParamField query="idLibro" type="integer" required>

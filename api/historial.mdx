@@ -1,5 +1,5 @@
 ---
-title: "Transaction History API — GET /api/historial"
+title: "Transaction History — GET /api/historial | ContaFácil"
 sidebarTitle: "Historial"
 description: "Query all posted journal entry lines for an empresa, optionally scoped to a single libro diario, from the vw_historial_asientos view."
 ---
@@ -10,12 +10,12 @@ The historial endpoint exposes a read-only view of every posted journal entry li
 
 ## GET /api/historial
 
-Returns an array of entry lines ordered by `idLibro DESC, idAsiento DESC` (most recent entries first). Each row represents a single debit or credit line within a journal entry.
+Returns an array of entry lines ordered by `id_libro DESC, id_asiento DESC, codigo_subcuenta ASC` (most recent entries first, sub-sorted by account code). Each row represents a single debit or credit line within a journal entry.
 
 ### Query Parameters
 
-<ParamField query="idEmpresa" type="integer" required>
-  Positive integer identifying the empresa whose asientos should be returned. The controller cross-joins through `libros_diarios` to ensure only books belonging to this empresa are included.
+<ParamField query="idEmpresa" type="integer">
+  Positive integer identifying the empresa whose asientos should be returned. Defaults to `1` when omitted. The controller cross-joins through `libros_diarios` to ensure only books belonging to this empresa are included.
 </ParamField>
 
 <ParamField query="idLibro" type="integer">

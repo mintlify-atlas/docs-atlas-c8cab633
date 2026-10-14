@@ -1,5 +1,5 @@
 ---
-title: "Journal Books (Libros Diarios) API Reference"
+title: "ContaFácil Journal Books (Libros Diarios) API Reference"
 sidebarTitle: "Libros"
 description: "Create, list, update, and delete journal books (libros diarios) in ContaFácil, with lifecycle state management backed by Supabase PostgreSQL."
 ---
@@ -121,8 +121,8 @@ Creates a new journal book for the specified company. The `nombreLibro` value is
 
 ### Request body
 
-<ParamField body="idEmpresa" type="integer" required>
-  The company's numeric primary key. Must be a positive integer.
+<ParamField body="idEmpresa" type="integer">
+  The company's numeric primary key. Must be a positive integer. Defaults to `1` if omitted.
 </ParamField>
 
 <ParamField body="nombreLibro" type="string" required>
@@ -204,8 +204,8 @@ Updates the name, description, or lifecycle state of an existing journal book. T
 
 ### Request body
 
-<ParamField body="idEmpresa" type="integer" required>
-  The company's numeric primary key. The book must belong to this company or the update will return 404.
+<ParamField body="idEmpresa" type="integer">
+  The company's numeric primary key. The book must belong to this company or the update will return 404. Defaults to `1` if omitted.
 </ParamField>
 
 <ParamField body="nombreLibro" type="string" required>

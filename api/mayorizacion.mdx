@@ -1,5 +1,5 @@
 ---
-title: "Ledger Posting API — GET /api/mayorizacion"
+title: "Ledger Posting — GET /api/mayorizacion | ContaFácil"
 sidebarTitle: "Mayorización"
 description: "Retrieve ledger-posted movements grouped by cuenta principal for a date range, optionally filtered to a single libro diario in ContaFácil."
 ---
@@ -14,8 +14,8 @@ Fetches detail lines from `vw_historial_asientos`, joined with `libros_diarios` 
 
 ### Query Parameters
 
-<ParamField query="idEmpresa" type="integer" required>
-  Positive integer identifying the empresa. Used to filter `libros_diarios` so only books that belong to this empresa are considered.
+<ParamField query="idEmpresa" type="integer">
+  Positive integer identifying the empresa. Defaults to `1` when omitted. Used to filter `libros_diarios` so only books that belong to this empresa are considered.
 </ParamField>
 
 <ParamField query="idLibro" type="integer">

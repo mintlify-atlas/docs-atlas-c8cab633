@@ -1,5 +1,5 @@
 ---
-title: "Journal Entries API — POST /api/asientos"
+title: "Journal Entries API — POST /api/asientos | ContaFácil"
 sidebarTitle: "Asientos"
 description: "Create double-entry journal entries and retrieve your chart of accounts in ContaFácil using the Supabase-backed accounting engine."
 ---
@@ -57,8 +57,8 @@ Posts a new journal entry to the specified *libro diario*. The controller verifi
 
 ### Request Body
 
-<ParamField body="idEmpresa" type="integer" required>
-  Positive integer identifying the empresa. Must match an existing, active empresa record.
+<ParamField body="idEmpresa" type="integer">
+  Positive integer identifying the empresa. Defaults to `1` when omitted. Must be a positive integer when provided.
 </ParamField>
 
 <ParamField body="idLibro" type="integer" required>
